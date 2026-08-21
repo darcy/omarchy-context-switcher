@@ -6,13 +6,16 @@ import qs.Ui
 import qs.Commons
 import "ContextModel.js" as Model
 
-// Bar-widget: active context name + N workspace slots for the focused monitor.
-// Reads state from the Context Switcher service; clicking a slot calls the
-// omarchy-context CLI (which routes through the service via IPC).
+// Bar-widget: per-monitor context name + workspace slots.
+//
+// Each bar surface shows the context of the workspace its own monitor is
+// displaying (Hyprland monitor activeWorkspace), so a monitor on Zippy's slot
+// 2 reads "Zippy 2" while another on Personal 1 reads "Personal 1" — fully
+// independent of which monitor is globally focused.
 //
 // Vertical bars: the context name collapses to its trigger letter and the
-// slots stack in a single column (same as Omarchy's default workspace widget).
-// The focused slot uses the shell's active selector color (bar.urgent).
+// slots stack in one column (like Omarchy's default workspace widget). The
+// active slot uses the shell's active selector color (bar.urgent).
 BarWidget {
   id: root
   moduleName: "context-switcher"
@@ -20,28 +23,68 @@ BarWidget {
   readonly property var service: bar ? bar.shell.firstPartyServiceFor("context-switcher") : null
 
   readonly property int slots: (service && service.config && service.config.slots) || 10
-  readonly property string contextName: service ? Model.contextName(service.config || { contexts: [] }, service.currentContextId || "personal") : ""
-  // The shortcut letter that summons this context's menu (shown when vertical).
-  readonly property string contextShortcut: {
-    if (!service || !service.config) return ""
-    var c = Model.contextById(service.config, service.currentContextId || "personal")
-    return c ? (c.shortcut || "") : ""
-  }
   readonly property bool ready: service && service.configLoaded
 
   // Bumped on any relevant change so slot property bindings re-evaluate.
   property int revision: 0
   function bump() { root.revision += 1 }
 
-  // Show slots 1..5 always; extend to the highest occupied (or active) slot in
-  // the current context so a window on slot 8 shows 1..8 with 2..7 dimmed.
+  // ---- Per-monitor identity ----
+  // The monitor this bar surface renders on (its Quickshell window's screen).
+  readonly property string myMonitor: {
+    void root.revision
+    var w = root.QsWindow && root.QsWindow.window ? root.QsWindow.window : null
+    return (w && w.screen) ? String(w.screen.name || "") : ""
+  }
+
+  // The workspace id this monitor is currently displaying.
+  // Prefer the service's authoritative hyprctl-derived map (which stays fresh
+  // across cross-monitor moves) over the lagging Quickshell monitors model.
+  readonly property int myMonitorWorkspaceId: {
+    void root.revision
+    if (service && service.monitorActiveWorkspace && service.monitorActiveWorkspace[root.myMonitor]) {
+      return Number(service.monitorActiveWorkspace[root.myMonitor]) || 0
+    }
+    var mons = Hyprland.monitors.values
+    for (var i = 0; i < mons.length; i++) {
+      var m = mons[i]
+      if (m && String(m.name || "") === root.myMonitor && m.activeWorkspace)
+        return Number(m.activeWorkspace.id) || 0
+    }
+    return 0
+  }
+
+  // This monitor's context: derived from the workspace it is showing, falling
+  // back to the persisted per-monitor context, then the default.
+  readonly property string contextId: {
+    void root.revision
+    if (!service || !service.config) return "personal"
+    var derived = root.myMonitorWorkspaceId > 0
+      ? Model.contextForWorkspace(service.config, root.myMonitorWorkspaceId)
+      : ""
+    if (derived) return derived
+    var mc = (service.state && service.state.monitor_context) ? service.state.monitor_context : {}
+    return (root.myMonitor && mc[root.myMonitor]) ? mc[root.myMonitor] : (service.currentContextId || "personal")
+  }
+
+  readonly property string contextName: service ? Model.contextName(service.config || { contexts: [] }, root.contextId) : ""
+  // The shortcut letter that summons this context's menu (shown when vertical).
+  readonly property string contextShortcut: {
+    if (!service || !service.config) return ""
+    var c = Model.contextById(service.config, root.contextId)
+    return c ? (c.shortcut || "") : ""
+  }
+
+  // ---- Slots ----
+
+  // Show slots 1..5 always; extend to the highest occupied/active slot in this
+  // monitor's context so a window on slot 8 shows 1..8 with 2..7 dimmed.
   readonly property var workspaceIds: {
     void root.revision
     var maxVisible = 5
-    if (service && service.config) {
-      var ctxId = service.currentContextId || "personal"
-      var cfg = service.config || { contexts: [], slots: root.slots }
-      var base = Model.contextBase(cfg, ctxId)
+    if (service && service.config && service.config.contexts) {
+      var cfg = service.config
+      var base = Model.contextBase(cfg, root.contextId)
       var values = Hyprland.workspaces.values
       for (var i = 0; i < values.length; i++) {
         var ws = values[i]
@@ -52,8 +95,8 @@ BarWidget {
         var occupied = ws.toplevels && ws.toplevels.values && ws.toplevels.values.length > 0
         if (occupied && slot > maxVisible) maxVisible = slot
       }
-      // Always keep the active slot visible even if it is empty.
-      var active = root.focusedSlot()
+      // Always keep this monitor's active slot visible even if it is empty.
+      var active = root.activeSlot()
       if (active > maxVisible && active <= root.slots) maxVisible = active
     }
     var ids = []
@@ -61,18 +104,22 @@ BarWidget {
     return ids
   }
 
-  // Touching revision here forces re-evaluation when it changes.
-  function focusedSlot() {
-    var ws = Hyprland.focusedWorkspace
-    if (!service || !ws) return 0
-    var slot = Model.slotForWorkspace(service.config || { contexts: [], slots: root.slots }, ws.id)
+  // The active slot = the workspace this monitor is showing, mapped into its
+  // context's slot range.
+  function activeSlot() {
+    var cfg = service && service.config ? service.config : null
+    if (!cfg) return 0
     void root.revision
-    return slot
+    var wsId = root.myMonitorWorkspaceId
+    if (wsId <= 0) return 0
+    var base = Model.contextBase(cfg, root.contextId)
+    var slot = wsId - base + 1
+    return (slot >= 1 && slot <= root.slots) ? slot : 0
   }
 
   function occupiedSlot(slot) {
     if (!service || !service.workspacesById) return false
-    var base = Model.contextBase(service.config || { contexts: [], slots: root.slots }, service.currentContextId || "personal")
+    var base = Model.contextBase(service.config || { contexts: [], slots: root.slots }, root.contextId)
     var occ = !!service.workspacesById[String(base + slot - 1)]
     void root.revision
     return occ
@@ -112,19 +159,19 @@ BarWidget {
       WidgetButton {
         required property int modelData
 
-        readonly property bool isFocused: root.focusedSlot() === modelData
+        readonly property bool isActive: root.activeSlot() === modelData
         readonly property bool isOccupied: root.occupiedSlot(modelData)
 
         bar: root.bar
         text: root.slotLabel(modelData)
-        // Focused slot uses the shell's active selector color.
-        active: isFocused
-        opacity: (isFocused || isOccupied) ? 1 : 0.5
+        // Active slot uses the shell's active selector color.
+        active: isActive
+        opacity: (isActive || isOccupied) ? 1 : 0.5
         horizontalMargin: 6
         verticalPadding: 6
         fixedWidth: root.vertical ? root.barSize : Style.space(20)
         fixedHeight: root.barSize
-        tooltipText: isFocused ? "Active" : (isOccupied ? "Occupied" : "Empty")
+        tooltipText: isActive ? "Active" : (isOccupied ? "Occupied" : "Empty")
         onPressed: function() { if (root.bar) root.bar.run("omarchy-context goto " + modelData) }
       }
     }
@@ -140,7 +187,7 @@ BarWidget {
     target: Hyprland
     function onRawEvent(event) {
       var name = String(event && event.name ? event.name : "")
-      if (name === "focusedmon" || name === "workspace" || name === "createworkspace" || name === "destroyworkspace" || name === "moveworkspace") {
+      if (name === "focusedmon" || name === "workspace" || name === "createworkspace" || name === "destroyworkspace" || name === "moveworkspace" || name === "activewindow") {
         root.bump()
       }
     }

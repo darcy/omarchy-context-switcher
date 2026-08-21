@@ -14,6 +14,7 @@ Commands:
   move-silent <slot>    Move active window silently to slot
   move-workspace <ctx>  Move active workspace to first empty slot in context
   cycle next|prev       Cycle to next/prev workspace globally, updating context
+  cycle-monitor [dir]   Move active workspace to next/prev monitor, focus it there
   next                  Switch to next context
   prev                  Switch to previous context
   current               Print current context name
@@ -38,6 +39,7 @@ case "$cmd" in
   move-silent)   omarchy-shell context moveSilent "${1:-}" ;;
   move-workspace) omarchy-shell context moveWorkspace "${1:-}" ;;
   cycle)         omarchy-shell context cycle "${1:-next}" ;;
+  cycle-monitor) omarchy-shell context cycleMonitor "${1:-next}" ;;
   next)          omarchy-shell context next ;;
   prev)          omarchy-shell context prev ;;
   current)       omarchy-shell context current ;;

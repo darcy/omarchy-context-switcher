@@ -33,6 +33,8 @@ Item {
 
   // Workspaces by id -> true when occupied (has clients). Refreshed on demand.
   property var workspacesById: ({})
+  // Authoritative monitor name -> active workspace id (from the hyprctl probe).
+  property var monitorActiveWorkspace: ({})
 
   // Emitted when context state changes so the bar-widget can re-render.
   signal stateUpdated()
@@ -85,16 +87,53 @@ Item {
   }
 
   // ---- Current focused monitor + context ----
+  //
+  // Event-driven: rebuilt from the live Quickshell Hyprland.monitors model,
+  // which exposes activeWorkspaceChanged / focusedChanged signals on each
+  // monitor. No hyprctl polling (hyprctl is a blocking compositor IPC and
+  // stalls interaction), so updates ride on the model's own change signals.
 
-  function refreshFocusedMonitor() {
-    var m = Hyprland.focusedMonitor
-    var next = m ? String(m.name || "") : ""
-    if (!next) next = "default"
-    var changed = next !== root.focusedMonitorName
-    root.focusedMonitorName = next
-    root.currentContextId = Model.monitorContext(root.state, root.focusedMonitorName, root.defaultContextId)
-    return changed
+  // Rebuild the monitorActiveWorkspace map, focused monitor name, and derived
+  // context from the live monitors model. Called on startup and whenever a
+  // monitor's active workspace or focused state changes.
+  // Update the focused monitor name and derive the current context from the
+  // authoritative monitorActiveWorkspace map (maintained from raw events / the
+  // seed), falling back to the focusedWorkspace singleton only if the map has
+  // no entry for the focused monitor. Does NOT rebuild the per-monitor map.
+  function syncMonitors() {
+    var focusedName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
+    var nameChanged = (focusedName || "default") !== root.focusedMonitorName
+    root.focusedMonitorName = focusedName || "default"
+
+    // Authoritative: the focused monitor's active workspace from the event/seed
+    // map. This is what the bar highlights, so goto/switch must agree with it.
+    var map = root.monitorActiveWorkspace || {}
+    var activeWs = map[focusedName] ? Number(map[focusedName]) || 0 : 0
+    if (!activeWs) {
+      var fw = Hyprland.focusedWorkspace
+      activeWs = fw ? Number(fw.id) || 0 : 0
+    }
+    var derived = activeWs > 0 ? Model.contextForWorkspace(root.config, activeWs) : ""
+    var changed = nameChanged
+    if (derived) {
+      if (derived !== root.currentContextId) changed = true
+      root.currentContextId = derived
+      var existing = (root.state.monitor_context || {})[root.focusedMonitorName]
+      if (existing !== derived) {
+        root.state = Model.setMonitorContext(root.state, root.focusedMonitorName, derived)
+        root.persistState()
+      }
+    } else {
+      var fallback = Model.monitorContext(root.state, root.focusedMonitorName, root.defaultContextId)
+      if (fallback !== root.currentContextId) changed = true
+      root.currentContextId = fallback
+    }
+    if (changed) root.stateUpdated()
   }
+
+  // (Monitor change handling is wired via Hyprland singleton signals below —
+  // focusedWorkspaceChanged / focusedMonitorChanged / rawEvent — which fire
+  // after the monitors model updates, so no polling is needed.)
 
   // ---- Workspace occupancy ----
 
@@ -120,8 +159,18 @@ Item {
     p.running = true
   }
 
-  // Focus/switch to a workspace id.
+  // Focus/switch to a workspace id. If that workspace is already shown on a
+  // monitor, focus that monitor instead of moving the workspace to the
+  // currently-focused monitor ("go to where it already is").
   function focusWorkspace(wsId) {
+    var mons = Hyprland.monitors ? Hyprland.monitors.values : []
+    for (var i = 0; i < mons.length; i++) {
+      var m = mons[i]
+      if (m && m.activeWorkspace && Number(m.activeWorkspace.id) === Number(wsId)) {
+        runEval('hl.dsp.focus({ monitor = "' + m.name + '" })')
+        return
+      }
+    }
     runEval('hl.dsp.focus({ workspace = "' + wsId + '" })')
   }
 
@@ -132,7 +181,56 @@ Item {
 
   // Move a workspace id to a monitor by name.
   function moveWorkspaceToMonitor(wsId, monitor) {
-    runEval('hl.dsp.workspace.move({ monitor = "' + monitor + '" })')
+    runEval('hl.dsp.workspace.move({ workspace = "' + wsId + '", monitor = "' + monitor + '" })')
+  }
+
+  // Cycle the active workspace to the next/prev monitor and focus it there.
+  // Context is context-aware: the target monitor takes the moved workspace's
+  // context, and every monitor's context is re-derived live.
+  function cycleMonitor(direction) {
+    var mons = Hyprland.monitors ? Hyprland.monitors.values : []
+    if (mons.length <= 1) return "ok"
+    var wsId = Hyprland.focusedWorkspace ? Number(Hyprland.focusedWorkspace.id) : 0
+    if (wsId <= 0) return "ok"
+
+    // Stable monitor order by id; find the one currently hosting the workspace.
+    var sorted = mons.slice().sort(function(a, b) { return Number(a.id) - Number(b.id) })
+    var names = []
+    var ids = []
+    for (var i = 0; i < sorted.length; i++) { names.push(String(sorted[i].name)); ids.push(String(sorted[i].id)) }
+
+    var idx = -1
+    for (i = 0; i < sorted.length; i++) {
+      var m = sorted[i]
+      if (m.activeWorkspace && Number(m.activeWorkspace.id) === wsId) { idx = i; break }
+    }
+    if (idx < 0) {
+      var focusedName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
+      for (i = 0; i < names.length; i++) { if (names[i] === focusedName) { idx = i; break } }
+    }
+    if (idx < 0) return "error"
+
+    var count = names.length
+    var nextIdx = direction === "prev" ? ((idx - 1 + count) % count) : ((idx + 1) % count)
+    var target = names[nextIdx]
+
+    // Move the workspace to the target monitor, then focus it there — chained
+    // in a single bash line so the focus happens only after the move lands
+    // (avoids the two async evals racing each other).
+    var moveEval = 'hl.dispatch(hl.dsp.workspace.move({ workspace = "' + wsId + '", monitor = "' + target + '" }))'
+    var focusEval = 'hl.dispatch(hl.dsp.focus({ monitor = "' + target + '" }))'
+    var p = dispatchProc
+    p.command = ["bash", "-lc", "hyprctl eval '" + moveEval + "'; hyprctl eval '" + focusEval + "'"]
+    p.running = true
+
+    // Wait a beat for the move to land, then probe hyprctl for the focused
+    // monitor's real workspace so the context follows correctly. The poll
+    // timer also re-probes, so this self-heals even if the move is slow.
+    Qt.callLater(function() {
+      root.syncMonitors()
+      root.stateUpdated()
+    })
+    return "ok"
   }
 
   function targetWorkspaceForMonitor(targetId, activeMonitor) {
@@ -146,7 +244,7 @@ Item {
   // Switch the active monitor's context to targetId, restoring its last slot.
   function switchContext(targetId) {
     if (!Model.contextExists(root.config, targetId)) { root.lastError = "unknown context: " + targetId; return "unknown" }
-    root.refreshFocusedMonitor()
+    root.syncMonitors()
     var monitor = root.focusedMonitorName
     var last = root.state.last_workspace ? root.state.last_workspace[targetId] : 1
     if (last === undefined || last === null) last = 1
@@ -156,7 +254,7 @@ Item {
 
     // The context belongs to whichever monitor actually ends up showing it.
     Qt.callLater(function() {
-      root.refreshFocusedMonitor()
+      root.syncMonitors()
       var activeMonitor = root.focusedMonitorName
       root.state = Model.setMonitorContext(root.state, activeMonitor, targetId)
       root.state = Model.setLastWorkspace(root.state, targetId, last)
@@ -171,13 +269,13 @@ Item {
   function gotoSlot(slotStr) {
     var slot = Number(slotStr)
     if (!isFinite(slot) || slot < 1 || slot > (root.config.slots || 10)) { root.lastError = "invalid slot"; return "error" }
-    root.refreshFocusedMonitor()
+    root.syncMonitors()
     var current = root.currentContextId
     var targetWs = Model.realWorkspaceId(root.config, current, slot)
 
     root.focusWorkspace(targetWs)
     Qt.callLater(function() {
-      root.refreshFocusedMonitor()
+      root.syncMonitors()
       var activeMonitor = root.focusedMonitorName
       root.state = Model.setMonitorContext(root.state, activeMonitor, current)
       root.state = Model.setLastWorkspace(root.state, current, slot)
@@ -192,7 +290,7 @@ Item {
   function moveWindow(slotStr, silent) {
     var slot = Number(slotStr)
     if (!isFinite(slot) || slot < 1 || slot > (root.config.slots || 10)) { root.lastError = "invalid slot"; return "error" }
-    root.refreshFocusedMonitor()
+    root.syncMonitors()
     var current = root.currentContextId
     var targetWs = Model.realWorkspaceId(root.config, current, slot)
     var monitor = root.focusedMonitorName
@@ -201,7 +299,7 @@ Item {
     root.moveWorkspaceToMonitor(targetWs, monitor)
     root.moveWindowTo(targetWs, silent)
     Qt.callLater(function() {
-      root.refreshFocusedMonitor()
+      root.syncMonitors()
       var activeMonitor = root.focusedMonitorName
       root.state = Model.setMonitorContext(root.state, activeMonitor, current)
       root.state = Model.setLastWorkspace(root.state, current, slot)
@@ -230,7 +328,7 @@ Item {
     }
 
     Qt.callLater(function() {
-      root.refreshFocusedMonitor()
+      root.syncMonitors()
       var activeMonitor = root.focusedMonitorName
       root.state = Model.setMonitorContext(root.state, activeMonitor, targetId)
       root.state = Model.setLastWorkspace(root.state, targetId, slot)
@@ -242,7 +340,7 @@ Item {
 
   // Cycle to next/prev workspace globally, updating the active monitor context.
   function cycleWorkspace(direction) {
-    root.refreshFocusedMonitor()
+    root.syncMonitors()
     root.refreshWorkspaces()
     var currentWs = Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : 1
     var slots = root.config.slots || 10
@@ -259,7 +357,7 @@ Item {
 
     root.focusWorkspace(targetWs)
     Qt.callLater(function() {
-      root.refreshFocusedMonitor()
+      root.syncMonitors()
       var activeMonitor = root.focusedMonitorName
       var targetCtx = Model.contextForWorkspace(root.config, targetWs)
       var slot = Model.slotForWorkspace(root.config, targetWs)
@@ -275,7 +373,7 @@ Item {
 
   // Switch to next/prev context.
   function switchRelative(delta) {
-    root.refreshFocusedMonitor()
+    root.syncMonitors()
     var monitor = root.focusedMonitorName
     var current = root.currentContextId
     var contexts = root.config.contexts || []
@@ -291,7 +389,7 @@ Item {
   function prevContext() { return root.switchRelative(-1) }
 
   function currentContextName() {
-    root.refreshFocusedMonitor()
+    root.syncMonitors()
     root.refreshWorkspaces()
     return Model.contextName(root.config, root.currentContextId)
   }
@@ -313,7 +411,7 @@ Item {
   }
 
   function refreshCurrentContext() {
-    root.refreshFocusedMonitor()
+    root.syncMonitors()
     root.refreshWorkspaces()
   }
 
@@ -343,40 +441,103 @@ Item {
     id: dispatchProc
   }
 
-  // Hyprland.focusedMonitor populates asynchronously; a short poll guarantees
-  // the focused monitor is detected even if the initial read happens before
-  // Hyprland reports one.
-  Timer {
-    id: monitorPoll
-    interval: 1000
-    repeat: true
-    running: true
-    onTriggered: {
-      var changed = root.refreshFocusedMonitor()
-      if (changed) root.stateUpdated()
+  // One-time startup seed of the authoritative monitor -> activeWorkspace map.
+  // Runs exactly once; ongoing updates come from raw events (no polling).
+  Process {
+    id: seedProbe
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applySeed(text)
     }
   }
 
-  // React to Hyprland raw events so external workspace/monitor changes (mouse
-  // wheel, clicking another monitor) keep the context state and indicator in
-  // sync without relying on signal-name guesses.
+  function seedProbeCommand() {
+    return ["bash", "-lc",
+      "hyprctl monitors -j 2>/dev/null | jq -r '.[] | \"\\(.name)\\t\\(.activeWorkspace.id)\\t\\(.focused)\"'"]
+  }
+
+  function seedMonitors() {
+    seedProbe.command = root.seedProbeCommand()
+    seedProbe.running = true
+  }
+
+  function applySeed(raw) {
+    var text = String(raw || "").trim()
+    var map = {}
+    var lines = text.split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim()
+      if (!line) continue
+      var p = line.split("\t")
+      if (p.length < 2) continue
+      map[p[0]] = Number(p[1]) || 0
+    }
+    var focused = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
+    root.monitorActiveWorkspace = map
+    if (focused) root.focusedMonitorName = focused
+    root.syncMonitors()
+    root.stateUpdated()
+  }
+
+  // Event-driven monitor tracking driven by raw Hyprland events, which carry
+  // authoritative per-monitor workspace data directly from the compositor
+  // event stream — no hyprctl polling (blocking IPC) and no reliance on the
+  // lagging Quickshell monitors model.
   function handleHyprlandEvent(event) {
     var name = String(event && event.name ? event.name : "")
-    if (name === "focusedmon" || name === "workspace" || name === "createworkspace" || name === "destroyworkspace" || name === "moveworkspace") {
-      root.refreshCurrentContext()
-      root.stateUpdated()
+    var parts = []
+    try { parts = (event && event.parse) ? event.parse(2) : [] } catch (e) { parts = [] }
+    // focusedmon <monitor> <workspace>: focus moved to <workspace> on <monitor>.
+    if (name === "focusedmon") {
+      if (parts.length >= 2) root.setMonitorWorkspace(parts[0], Number(parts[1]) || 0, true)
+    // workspace / moveworkspace <workspace> <monitor>: a workspace is now on a monitor.
+    } else if (name === "workspace" || name === "moveworkspace") {
+      if (parts.length >= 2) root.setMonitorWorkspace(parts[1], Number(parts[0]) || 0, false)
+      // The source monitor's fallback workspace is not in the event, so do a
+      // one-shot re-probe to refresh the full map. Event-triggered only (not
+      // polling), so it does not stall interaction.
+      if (!seedProbe.running) { seedProbe.command = root.seedProbeCommand(); seedProbe.running = true }
     }
+  }
+
+  // Update one monitor's active workspace from authoritative event data and
+  // re-derive focus + context, bumping bars when anything changed.
+  function setMonitorWorkspace(monitor, wsId, focused) {
+    if (!monitor) return
+    var map = Object.assign({}, root.monitorActiveWorkspace || {})
+    map[monitor] = wsId
+    if (focused) root.focusedMonitorName = monitor
+    var mapChanged = JSON.stringify(map) !== JSON.stringify(root.monitorActiveWorkspace)
+    root.monitorActiveWorkspace = map
+
+    var activeWs = wsId
+    if (focused) activeWs = wsId
+    var derived = activeWs > 0 ? Model.contextForWorkspace(root.config, activeWs) : ""
+    var changed = mapChanged
+    if (derived) {
+      if (derived !== root.currentContextId) changed = true
+      root.currentContextId = derived
+      var existing = (root.state.monitor_context || {})[root.focusedMonitorName]
+      if (existing !== derived) {
+        root.state = Model.setMonitorContext(root.state, root.focusedMonitorName, derived)
+        root.persistState()
+      }
+    }
+    if (changed) root.stateUpdated()
   }
 
   Connections {
     target: Hyprland
     function onRawEvent(event) { root.handleHyprlandEvent(event) }
+    function onFocusedMonitorChanged() { root.syncMonitors() }
   }
 
   Component.onCompleted: {
     root.loadConfig()
     root.loadState()
-    root.refreshCurrentContext()
+    // Seed the authoritative monitor map once from hyprctl; events keep it
+    // fresh afterwards (no polling).
+    Qt.callLater(function() { root.seedMonitors() })
   }
 
   IpcHandler {
@@ -390,6 +551,7 @@ Item {
     function moveSilent(slot: string): string { return root.moveWindow(slot, true) }
     function moveWorkspace(contextId: string): string { return root.moveWorkspace(contextId) }
     function cycle(direction: string): string { return root.cycleWorkspace(direction) }
+    function cycleMonitor(direction: string): string { return root.cycleMonitor(direction) }
     function next(): string { return root.nextContext() }
     function prev(): string { return root.prevContext() }
     function current(): string { return root.currentContextName() }

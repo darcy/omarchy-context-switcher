@@ -66,6 +66,11 @@ hl.unbind("SUPER + TAB")
 hl.unbind("SUPER + SHIFT + TAB")
 o.bind("SUPER + TAB", "Cycle workspace next", "omarchy-context cycle next")
 o.bind("SUPER + SHIFT + TAB", "Cycle workspace previous", "omarchy-context cycle prev")
+
+-- Cycle the active workspace to the next/prev monitor (context-aware).
+hl.unbind("SUPER + backslash")
+o.bind("SUPER + backslash", "Move workspace to next monitor", "omarchy-context cycle-monitor next")
+o.bind("SUPER + SHIFT + backslash", "Move workspace to previous monitor", "omarchy-context cycle-monitor prev")
 LUA
 }
 
