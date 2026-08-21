@@ -34,7 +34,7 @@ echo "Installed plugin to $PLUGIN_DST"
 
 # 2. CLI + generator scripts -> ~/.local/bin/
 echo "--- CLI ---"
-for f in omarchy-context omarchy-context-generate omarchy-context-move-workspace; do
+for f in omarchy-context omarchy-context-generate omarchy-context-move-workspace omarchy-context-disable; do
   if [[ -f "$BIN_DIR/$f" ]]; then cp -a "$BIN_DIR/$f" "$BACKUP_DIR/" 2>/dev/null || true; fi
   cp "$REPO/bin/$f" "$BIN_DIR/$f"
   chmod +x "$BIN_DIR/$f"
@@ -81,9 +81,17 @@ LUA
 echo "--- Enable plugin ---"
 omarchy plugin enable "$PLUGIN_ID" >/dev/null 2>&1 || echo "  (plugin enable reported non-zero; may already be enabled or need a shell rescan)"
 
-# 7. Place the bar-widget in the left section if not already present.
+# 7. Place the bar-widget in the left section if not already present, and hide
+#    the default omarchy.workspaces widget (the context-switcher replaces it).
 echo "--- Bar widget ---"
-omarchy bar put "$PLUGIN_ID" --section left >/dev/null 2>&1 || echo "  (bar put skipped; widget may already be placed)"
+SHELL_JSON="$HOME/.config/omarchy/shell.json"
+if [[ -f "$SHELL_JSON" ]]; then
+  jq '(.bar.layout.left) = ([.bar.layout.left[] | select(.id != "omarchy.workspaces" and .id != "context-switcher")] + [{"id": "context-switcher"}])' \
+    "$SHELL_JSON" > "$SHELL_JSON.tmp" && mv "$SHELL_JSON.tmp" "$SHELL_JSON"
+  echo "Removed default omarchy.workspaces; ensured context-switcher in left section"
+else
+  omarchy bar put "$PLUGIN_ID" --section left >/dev/null 2>&1 || true
+fi
 
 # 8. Reload Hyprland for the new bindings.
 echo "--- Reload ---"
