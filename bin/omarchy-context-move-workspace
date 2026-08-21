@@ -1,0 +1,22 @@
+#!/bin/bash
+# omarchy-context-move-workspace: move every window in workspace <source> to
+# workspace <target>, then focus <target>. Uses the Hyprland 0.56 Lua
+# dispatcher form via `hyprctl eval`.
+# Usage: omarchy-context-move-workspace <source_ws> <target_ws>
+set -euo pipefail
+
+source_ws="${1:?Usage: $0 <source_ws> <target_ws>}"
+target_ws="${2:?Usage: $0 <source_ws> <target_ws>}"
+
+[[ "$source_ws" == "$target_ws" ]] && exit 0
+(( source_ws >= 1 && target_ws >= 1 )) || exit 0
+
+addrs=$(hyprctl clients -j | jq -r --argjson s "$source_ws" \
+  '[.[] | select(.workspace.id == $s)] | sort_by(.at[0]) | .[].address')
+
+while IFS= read -r addr; do
+  [[ -n "$addr" ]] || continue
+  hyprctl eval "hl.dispatch(hl.dsp.window.move({ workspace = \"$target_ws\", follow = false, window = \"address:$addr\" }))" >/dev/null 2>&1
+done <<< "$addrs"
+
+hyprctl eval "hl.dispatch(hl.dsp.focus({ workspace = \"$target_ws\" }))" >/dev/null 2>&1

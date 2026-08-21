@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "context-switcher",
+  "name": "Context Switcher",
+  "version": "0.1.0",
+  "author": "darcy",
+  "description": "Per-monitor workspace contexts: name + slot indicator and slot/context switching.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "ContextService.qml",
+    "barWidget": "ContextBarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Context Switcher",
+    "description": "Active context name and workspace slots for the focused monitor.",
+    "category": "Workspace",
+    "allowMultiple": false,
+    "defaultSection": "left"
+  }
+}

@@ -1,0 +1,53 @@
+#!/bin/bash
+# omarchy-context: drive the Context Switcher service via IPC.
+# Thin wrapper over `omarchy-shell context <method> <args>`.
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+Usage: omarchy-context <command> [args]
+
+Commands:
+  switch <context>      Switch to context, restoring last workspace
+  goto <slot>           Go to workspace slot in current context
+  move <slot>           Move active window to slot in current context
+  move-silent <slot>    Move active window silently to slot
+  move-workspace <ctx>  Move active workspace to first empty slot in context
+  cycle next|prev       Cycle to next/prev workspace globally, updating context
+  next                  Switch to next context
+  prev                  Switch to previous context
+  current               Print current context name
+  list                  List all contexts
+  validate              Validate config.json
+  status                Print service status JSON
+EOF
+}
+
+if (( $# < 1 )); then
+  usage
+  exit 1
+fi
+
+cmd="$1"
+shift
+
+case "$cmd" in
+  switch)        omarchy-shell context switchTo "${1:-}" ;;
+  goto)          omarchy-shell context goto "${1:-}" ;;
+  move)          omarchy-shell context move "${1:-}" ;;
+  move-silent)   omarchy-shell context moveSilent "${1:-}" ;;
+  move-workspace) omarchy-shell context moveWorkspace "${1:-}" ;;
+  cycle)         omarchy-shell context cycle "${1:-next}" ;;
+  next)          omarchy-shell context next ;;
+  prev)          omarchy-shell context prev ;;
+  current)       omarchy-shell context current ;;
+  list)          omarchy-shell context list ;;
+  validate)      omarchy-shell context validate ;;
+  status)        omarchy-shell context status ;;
+  -h|--help|help) usage ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage
+    exit 1
+    ;;
+esac
