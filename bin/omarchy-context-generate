@@ -87,27 +87,34 @@ gen_menu() {
       $ctx.id as $cid |
       . as $acc |
       $acc
+      | ($ctx.chrome_profile // "") as $explicit
+      | (.default_chrome_profile // "Default") as $dp
+      | (if $explicit == "" then $dp else $explicit end) as $profile
       | .["contexts." + $cid] = { icon: ($ctx.icon // "󰯆"), label: ($ctx.name // $cid), target: ("contexts." + $cid + ".menu") }
       | .["contexts." + $cid + ".menu"] = { icon: ($ctx.icon // "󰯆"), label: ($ctx.name // $cid) }
       | .["contexts." + $cid + ".menu.!go-to"] = { icon: "󰁔", label: ("Go to " + ($ctx.name // $cid)), action: ("omarchy-context switch " + $cid) }
+      | (if $explicit != "" then
+           .["contexts." + $cid + ".menu.!browser"] = { icon: "󰖟", label: "Browser", action: ("omarchy-context-launch " + ($profile | @json)) }
+         else . end)
       | reduce ($ctx.menu // [])[] as $item (.;
-          .["contexts." + $cid + ".menu." + $item.label] =
-            (if $item.type == "web" then { icon: ($item.icon // "󰅂"), label: $item.label, action: ("omarchy-launch-webapp " + ($item.url | @json)) }
-             elif $item.type == "browser" then { icon: ($item.icon // "󰈙"), label: $item.label, action: "omarchy-launch-browser" }
-             elif $item.type == "mosh" then { icon: ($item.icon // "󰒵"), label: $item.label, action: ("alacritty --title " + ($item.label | @json) + " -e mosh " + ($item.host | @json)) }
-             elif $item.type == "terminal" then { icon: ($item.icon // "󰆍"), label: $item.label, action: ("alacritty --title " + ($item.label | @json) + " -e sh -c " + ($item.command | @json)) }
-             else { icon: ($item.icon // "󰆍"), label: $item.label, action: $item.command } end)
-        )
-      | .["contexts." + $cid + ".menu.~move-ws"] = { icon: "󰄾", label: ("Move to " + ($ctx.name // $cid)), action: ("omarchy-context move-workspace " + $cid) }
-      | .["contexts." + $cid + ".menu.~items"] = { icon: "󰍝", label: "Modify items", target: ("contexts." + $cid + ".menu.~items.menu") }
-      | .["contexts." + $cid + ".menu.~items.menu"] = { icon: "󰍝", label: ("Items in " + ($ctx.name // $cid)) }
-      | .["contexts." + $cid + ".menu.~items.menu.!add"] = { icon: "󰙁", label: "Add item", action: ("omarchy-context edit-item " + $cid + " add") }
+          if ($item.type // "") != "browser" then
+            .["contexts." + $cid + ".menu." + $item.label] =
+              (if $item.type == "web" then { icon: ($item.icon // "󰅂"), label: $item.label, action: ("omarchy-context-launch " + ($profile | @json) + " " + ($item.url | @json)) }
+               elif $item.type == "mosh" then { icon: ($item.icon // "󰒵"), label: $item.label, action: ("alacritty --title " + ($item.label | @json) + " -e mosh " + ($item.host | @json)) }
+               elif $item.type == "ssh" then { icon: ($item.icon // "󰒵"), label: $item.label, action: ("alacritty --title " + ($item.label | @json) + " -e ssh " + ($item.host | @json)) }
+               elif $item.type == "terminal" then { icon: ($item.icon // "󰆍"), label: $item.label, action: ("alacritty --title " + ($item.label | @json) + " -e sh -c " + ($item.command | @json)) }
+               else { icon: ($item.icon // "󰆍"), label: $item.label, action: $item.command } end)
+          else . end)
+      | .["contexts." + $cid + ".menu.~edit"] = { icon: "󰏪", label: ("Edit " + ($ctx.name // $cid)), target: ("contexts." + $cid + ".menu.~edit.menu") }
+      | .["contexts." + $cid + ".menu.~edit.menu"] = { icon: "󰏪", label: ("Edit " + ($ctx.name // $cid)) }
+      | .["contexts." + $cid + ".menu.~edit.menu.!details"] = { icon: "󰏪", label: "Edit details", action: ("omarchy-context edit " + $cid) }
+      | .["contexts." + $cid + ".menu.~edit.menu.!add"] = { icon: "󰐕", label: "Add item", action: ("omarchy-context edit-item " + $cid + " add") }
       | reduce range(0; ($ctx.menu | length)) as $i (.;
           $ctx.menu[$i] as $it |
-          .["contexts." + $cid + ".menu.~items.menu.e" + ($i|tostring)] =
-            { icon: ($it.icon // "󰅂"), label: ("Edit " + $it.label), action: ("omarchy-context edit-item " + $cid + " " + ($i|tostring)) }
+          .["contexts." + $cid + ".menu.~edit.menu.e" + ($i|tostring)] =
+            { icon: "󰏪", label: ("Edit " + $it.label), action: ("omarchy-context edit-item " + $cid + " " + ($i|tostring)) }
         )
-      | .["contexts." + $cid + ".menu.~edit"] = { icon: "󰐎", label: ("Edit " + ($ctx.name // $cid)), action: ("omarchy-context edit " + $cid) }
+      | .["contexts." + $cid + ".menu.~move-ws"] = { icon: "󰄾", label: ("Move to " + ($ctx.name // $cid)), action: ("omarchy-context move-workspace " + $cid) }
     )
     | { contexts: { icon: "󰯆", label: "Contexts" } }
     + .

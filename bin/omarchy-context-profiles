@@ -1,0 +1,32 @@
+#!/bin/bash
+# omarchy-context-profiles: list the Chrome profile directories available in
+# the default Chromium-based browser. Emits one tab-delimited line per profile:
+#   <profile-dir>\t<display-name>
+# The profile dir (e.g. "Profile 1") is what you pass to --profile-directory;
+# the display name is what a UI shows.
+set -euo pipefail
+
+browser=$(xdg-settings get default-web-browser 2>/dev/null || echo chromium.desktop)
+
+case $browser in
+  brave*)                 cfgdir="$HOME/.config/BraveSoftware/Brave-Browser" ;;
+  google-chrome*)         cfgdir="$HOME/.config/google-chrome" ;;
+  microsoft-edge*)        cfgdir="$HOME/.config/microsoft-edge" ;;
+  vivaldi*)               cfgdir="$HOME/.config/vivaldi" ;;
+  *chromium* | chrom*)    cfgdir="$HOME/.config/chromium" ;;
+  *)                      cfgdir="$HOME/.config/chromium" ;;
+esac
+
+localstate="$cfgdir/Local State"
+if [[ ! -f "$localstate" ]]; then
+  echo "Default"
+  exit 0
+fi
+
+# Profile info cache keys are the directory names; the entry may carry a
+# human name (gaia_name/name). Prefer it, fall back to the dir name.
+jq -r '
+  (.profile.info_cache // {}) | to_entries[]
+  | [ .key, (.value.name // .value.gaia_name // .key) ]
+  | @tsv
+' "$localstate"

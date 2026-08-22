@@ -479,12 +479,19 @@ Item {
       { id: id, icon: icon || "" }, false)
   }
 
-  function addContext(name, shortcut, icon) {
+  // Store a context's Chrome profile directory. "" means "use the default"
+  // (stored as null so it is absent).
+  function setContextChromeProfile(id, profile) {
+    runMutation("(.contexts = [.contexts[] | if .id == $id then .chrome_profile = (if $profile == \"\" then null else $profile end) else . end])",
+      { id: id, profile: profile }, false)
+  }
+
+  function addContext(name, shortcut, icon, chromeProfile) {
     var slug = Model.slugify(name)
     if (!slug) { root.lastError = "context name must not be empty"; return "error" }
     if (Model.contextExists(root.config, slug)) { root.lastError = "context already exists: " + slug; return "error" }
-    runMutation(".contexts += [{id: $slug, name: $name, shortcut: $shortcut, icon: $icon, menu: []}]",
-      { slug: slug, name: name, shortcut: Model.normalizeShortcut(shortcut), icon: icon || "" }, true)
+    runMutation(".contexts += [{id: $slug, name: $name, shortcut: $shortcut, icon: $icon, chrome_profile: (if $profile == \"\" then null else $profile end), menu: []}]",
+      { slug: slug, name: name, shortcut: Model.normalizeShortcut(shortcut), icon: icon || "", profile: chromeProfile || "" }, true)
     return "ok"
   }
 
@@ -787,7 +794,8 @@ Item {
     function renameContext(id: string, name: string): string { root.renameContext(id, name); return "ok" }
     function setShortcut(id: string, shortcut: string): string { root.setContextShortcut(id, shortcut); return "ok" }
     function setIcon(id: string, icon: string): string { root.setContextIcon(id, icon); return "ok" }
-    function addContext(name: string, shortcut: string, icon: string): string { return root.addContext(name, shortcut, icon) }
+    function setChromeProfile(id: string, profile: string): string { root.setContextChromeProfile(id, profile); return "ok" }
+    function addContext(name: string, shortcut: string, icon: string, chromeProfile: string): string { return root.addContext(name, shortcut, icon, chromeProfile) }
     function deleteContext(id: string, targetId: string): string { return root.deleteContext(id, targetId) }
     function addItem(contextId: string, label: string, url: string, icon: string): string { return root.addItem(contextId, label, url, icon) }
     function renameItem(contextId: string, oldLabel: string, newLabel: string): string { root.renameItem(contextId, oldLabel, newLabel); return "ok" }

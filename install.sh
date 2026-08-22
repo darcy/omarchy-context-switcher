@@ -34,7 +34,7 @@ echo "Installed plugin to $PLUGIN_DST"
 
 # 2. CLI + generator scripts -> ~/.local/bin/
 echo "--- CLI ---"
-for f in omarchy-context omarchy-context-generate omarchy-context-move-workspace omarchy-context-delete-context omarchy-context-disable omarchy-context-teardown omarchy-context-setup; do
+for f in omarchy-context omarchy-context-generate omarchy-context-move-workspace omarchy-context-delete-context omarchy-context-launch omarchy-context-profiles omarchy-context-disable omarchy-context-teardown omarchy-context-setup; do
   if [[ -f "$BIN_DIR/$f" ]]; then cp -a "$BIN_DIR/$f" "$BACKUP_DIR/" 2>/dev/null || true; fi
   cp "$REPO/bin/$f" "$BIN_DIR/$f"
   chmod +x "$BIN_DIR/$f"

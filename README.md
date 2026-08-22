@@ -14,16 +14,24 @@ and menus switch context, jump to slots, move windows, and cycle workspaces.
   "Contexts" section (right-click advances context).
 - **Launcher = the system menu** — `omarchy-context-generate --menu` writes an
   `omarchy-menu.jsonc` extension with a searchable "Contexts" section. Each
-  context is a submenu of launch items plus management actions (Go to, Move
-  workspace, Edit, and a "Modify items" submenu that lists each item as
-  "Edit <item>" plus "Add item").
+  context is a submenu of launch items plus management actions (Go to, a
+  single "Edit <context>" submenu — Edit details, Add item, then Edit <item>
+  for each item — and Move workspace).
+- **Chrome profiles** — a context's `chrome_profile` selects the profile used
+  for its web items and its auto-inserted "Browser" item (only present when a
+  profile is set). URLs always launch with an explicit profile (the context's,
+  or `default_chrome_profile`) so Chromium never falls back to the last-used
+  profile. Item types are Web, Mosh, SSH, Terminal, Script — "Browser" is no
+  longer a manual item type.
 - **Editor** (`ContextMenuPanel.qml`) — a centered Quickshell overlay used only
   for management forms: add/edit/delete contexts and add/edit/delete items. It
   is summoned by the system menu's management actions, never by the launcher,
   and returns to the system menu on save/cancel.
 - **Service** (`context` IPC target) — owns config/state, tracks per-monitor
   context, implements all commands, and persists config edits from the editor.
-- **`omarchy-context`** CLI — `switch|goto|move|move-silent|move-workspace|cycle|next|prev|current|list|menu|edit|edit-item|edit-json|add-context|rename-context|set-shortcut|set-icon|delete-context|add-item|rename-item|set-item-icon|delete-item|validate|status`.
+- **`omarchy-context`** CLI — `switch|goto|move|move-silent|move-workspace|cycle|next|prev|current|list|menu|edit|edit-item|edit-json|add-context|rename-context|set-shortcut|set-icon|set-profile|delete-context|add-item|rename-item|set-item-icon|delete-item|validate|status`.
+- **`omarchy-context-profiles`** — list the default browser's Chrome profiles.
+- **`omarchy-context-launch`** — open a URL/browser with a specific profile.
 - **`omarchy-context-generate`** — generates the Hyprland keybindings and the
   system-menu extension from the config file.
 

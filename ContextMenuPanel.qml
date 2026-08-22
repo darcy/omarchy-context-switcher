@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Wayland
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "ContextModel.js" as Model
@@ -43,6 +44,8 @@ Panel {
   property bool itemAddMode: false
   property string oldItemLabel: ""
   property string itemType: "web"
+  property string chromeProfile: ""
+  property var chromeProfileOptions: []
 
   property var service: null
   readonly property var config: (service && service.config) ? service.config : { contexts: [], slots: 10 }
@@ -61,6 +64,29 @@ Panel {
 
   function contextById(id) {
     return Model.contextById(config, id)
+  }
+
+  // Available Chrome profiles, loaded on demand into chromeProfileDropdown.
+  function loadProfiles() {
+    profileProc.command = ["bash", "-lc", "omarchy-context-profiles 2>/dev/null"]
+    profileProc.running = true
+  }
+
+  function applyProfiles(raw) {
+    var opts = []
+    var lines = String(raw || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim()
+      if (!line) continue
+      var p = line.split("\t")
+      var dir = p[0] || ""
+      var name = p[1] || dir
+      if (!dir) continue
+      opts.push({ value: dir, label: name === dir ? name : name + " (" + dir + ")" })
+    }
+    root.chromeProfileOptions = opts
+    ctxProfileDropdown.options = opts
+    ctxProfileDropdown.value = root.chromeProfile
   }
 
   // Force active focus onto a field, retrying until it lands. The panel window
@@ -97,6 +123,14 @@ Panel {
   function close() { root.controller.hide() }
   function toggle() { if (root.opened) root.close(); else root.open() }
 
+  Process {
+    id: profileProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyProfiles(text)
+    }
+  }
+
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
       return root.bar.switchPanelFrom(root.barIdentity, direction)
@@ -114,7 +148,7 @@ Panel {
 
   function goBack() {
     if (root.confirmOpen) { root.confirmOpen = false; return }
-    if (root.view === "editItem") root.returnToSystemMenu("contexts." + root.contextId + ".menu.~items")
+    if (root.view === "editItem") root.returnToSystemMenu("contexts." + root.contextId + ".menu.~edit")
     else root.returnToSystemMenu(root.editingAdd ? "" : "contexts." + root.contextId)
   }
 
@@ -123,6 +157,8 @@ Panel {
   function startAddContext() {
     root.editingAdd = true; root.contextId = ""
     ctxNameField.text = ""; ctxShortcutField.text = ""; ctxIconField.text = ""
+    root.chromeProfile = (config.default_chrome_profile || "Default")
+    root.loadProfiles()
     root.view = "editContext"
     root.focusField(ctxNameField)
   }
@@ -132,21 +168,32 @@ Panel {
     if (!c) return
     root.editingAdd = false; root.contextId = id
     ctxNameField.text = c.name || ""; ctxShortcutField.text = c.shortcut || ""; ctxIconField.text = c.icon || ""
+    root.chromeProfile = (c.chrome_profile || config.default_chrome_profile || "Default")
+    root.loadProfiles()
     root.view = "editContext"
     root.focusField(ctxNameField)
+  }
+
+  // Store the chosen profile; "" when it equals the default, so the context
+  // explicitly uses the default (and gets no dedicated Browser item).
+  function effectiveProfile() {
+    var dflt = (config.default_chrome_profile || "Default")
+    return root.chromeProfile === dflt ? "" : root.chromeProfile
   }
 
   function applyContextSave() {
     var name = ctxNameField.text.trim()
     if (!name) return
+    var profile = root.effectiveProfile()
     if (root.editingAdd) {
-      if (service) service.addContext(name, ctxShortcutField.text, ctxIconField.text)
+      if (service) service.addContext(name, ctxShortcutField.text, ctxIconField.text, profile)
     } else if (service) {
       service.renameContext(root.contextId, name)
       service.setContextShortcut(root.contextId, ctxShortcutField.text)
       service.setContextIcon(root.contextId, ctxIconField.text)
+      service.setContextChromeProfile(root.contextId, profile)
     }
-    root.returnToSystemMenu(root.editingAdd ? "" : "contexts." + root.contextId)
+    root.close()
   }
 
   function requestDeleteContext() {
@@ -163,7 +210,7 @@ Panel {
     root.confirmMessage = msg
     root.confirmAction = function() {
       if (service) service.deleteContext(c.id, target)
-      root.returnToSystemMenu("")
+      root.close()
     }
     root.confirmOpen = true
     Qt.callLater(function() { confirmGrab.forceActiveFocus() })
@@ -186,7 +233,7 @@ Panel {
     var item = c.menu[idx]
     root.itemAddMode = false; root.contextId = cid; root.itemIndex = idx
     root.oldItemLabel = item.label || ""
-    root.itemType = item.type || (item.url ? "web" : item.host ? "mosh" : item.command ? "script" : "browser")
+    root.itemType = item.type || (item.url ? "web" : item.host ? "mosh" : item.command ? "script" : "web")
     itemTitleField.text = item.label || ""; itemIconField.text = item.icon || ""
     itemUrlField.text = item.url || ""; itemHostField.text = item.host || ""
     itemCommandField.text = item.command || ""; itemWorkdirField.text = item.workdir || ""
@@ -200,8 +247,7 @@ Panel {
     var t = root.itemType
     o.type = t
     if (t === "web") o.url = itemUrlField.text.trim()
-    else if (t === "browser") { /* no extra fields */ }
-    else if (t === "mosh") {
+    else if (t === "mosh" || t === "ssh") {
       o.host = itemHostField.text.trim()
       if (itemCommandField.text.trim()) o.command = itemCommandField.text.trim()
       if (itemWorkdirField.text.trim()) o.workdir = itemWorkdirField.text.trim()
@@ -214,9 +260,9 @@ Panel {
   // First type-specific field for the current item type (Enter target).
   function firstTypeField() {
     if (root.itemType === "web") return itemUrlField
-    if (root.itemType === "mosh") return itemHostField
+    if (root.itemType === "mosh" || root.itemType === "ssh") return itemHostField
     if (root.itemType === "terminal" || root.itemType === "script") return itemCommandField
-    return itemIconField  // browser: no type-specific field
+    return itemIconField
   }
 
   function applyItemSave() {
@@ -238,7 +284,7 @@ Panel {
     root.confirmMessage = "Delete item \u201c" + label + "\u201d from \u201c" + cname + "\u201d?"
     root.confirmAction = function() {
       if (service) service.deleteItem(root.contextId, label)
-      root.returnToSystemMenu("contexts." + root.contextId + ".menu.~items")
+      root.close()
     }
     root.confirmOpen = true
     Qt.callLater(function() { confirmGrab.forceActiveFocus() })
@@ -295,7 +341,7 @@ Panel {
         id: keyCatcher
         anchors.fill: parent
         focus: true
-        blocked: root.confirmOpen || root.editingText
+        blocked: root.confirmOpen || root.editingText || ctxProfileDropdown.popupOpen
         onMoveRequested: function(dx, dy) { if (dx < 0) root.goBack() }
         onCloseRequested: root.goBack()
         onTabRequested: function(d) { root.switchPanel(d) }
@@ -371,8 +417,19 @@ Panel {
                 id: ctxIconField
                 width: parent.width
                 placeholderText: "\uf1d4"
-                onAccepted: root.applyContextSave()
+                onAccepted: ctxProfileDropdown.forceActiveFocus()
                 Keys.onEscapePressed: root.cancelEdit()
+              }
+
+              PanelSectionHeader { text: "Chrome profile (URLs + Browser)" }
+              Dropdown {
+                id: ctxProfileDropdown
+                width: parent.width
+                label: ""
+                showLabel: false
+                options: root.chromeProfileOptions
+                value: root.chromeProfile
+                onChanged: function(v) { root.chromeProfile = v }
               }
 
               RowLayout {
@@ -411,8 +468,8 @@ Panel {
                 Repeater {
                   model: [
                     { value: "web", label: "Web" },
-                    { value: "browser", label: "Browser" },
                     { value: "mosh", label: "Mosh" },
+                    { value: "ssh", label: "SSH" },
                     { value: "terminal", label: "Terminal" },
                     { value: "script", label: "Script" }
                   ]
@@ -455,30 +512,30 @@ Panel {
                 Keys.onEscapePressed: root.cancelEdit()
               }
 
-              PanelSectionHeader { visible: root.itemType === "mosh"; text: "Host" }
+              PanelSectionHeader { visible: root.itemType === "mosh" || root.itemType === "ssh"; text: "Host" }
               TextField {
                 id: itemHostField
-                visible: root.itemType === "mosh"
+                visible: root.itemType === "mosh" || root.itemType === "ssh"
                 width: parent.width
                 placeholderText: "user@host"
                 onAccepted: itemCommandField.forceActiveFocus()
                 Keys.onEscapePressed: root.cancelEdit()
               }
 
-              PanelSectionHeader { visible: root.itemType === "mosh" || root.itemType === "terminal" || root.itemType === "script"; text: "Command" }
+              PanelSectionHeader { visible: root.itemType === "mosh" || root.itemType === "ssh" || root.itemType === "terminal" || root.itemType === "script"; text: "Command" }
               TextField {
                 id: itemCommandField
-                visible: root.itemType === "mosh" || root.itemType === "terminal" || root.itemType === "script"
+                visible: root.itemType === "mosh" || root.itemType === "ssh" || root.itemType === "terminal" || root.itemType === "script"
                 width: parent.width
-                placeholderText: root.itemType === "mosh" ? "optional remote command" : "command to run"
-                onAccepted: root.itemType === "mosh" ? itemWorkdirField.forceActiveFocus() : root.applyItemSave()
+                placeholderText: (root.itemType === "mosh" || root.itemType === "ssh") ? "optional remote command" : "command to run"
+                onAccepted: (root.itemType === "mosh" || root.itemType === "ssh") ? itemWorkdirField.forceActiveFocus() : root.applyItemSave()
                 Keys.onEscapePressed: root.cancelEdit()
               }
 
-              PanelSectionHeader { visible: root.itemType === "mosh"; text: "Workdir (optional)" }
+              PanelSectionHeader { visible: root.itemType === "mosh" || root.itemType === "ssh"; text: "Workdir (optional)" }
               TextField {
                 id: itemWorkdirField
-                visible: root.itemType === "mosh"
+                visible: root.itemType === "mosh" || root.itemType === "ssh"
                 width: parent.width
                 placeholderText: "~/work"
                 onAccepted: root.applyItemSave()

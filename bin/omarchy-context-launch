@@ -1,0 +1,30 @@
+#!/bin/bash
+# omarchy-context-launch: open a URL (or just the browser) in the default
+# Chromium-based browser using a specific profile directory.
+#
+# Usage: omarchy-context-launch <profile> [url]
+#
+# With a url, launches the browser as a web app in that profile; without one,
+# opens the browser window in that profile. Passing an explicit profile (never
+# blank) avoids Chromium silently falling back to the last-used profile.
+set -euo pipefail
+
+profile="${1:?Usage: $0 <profile> [url]}"
+url="${2:-}"
+
+browser=$(xdg-settings get default-web-browser 2>/dev/null || echo chromium.desktop)
+case $browser in
+  google-chrome* | brave* | microsoft-edge* | opera* | vivaldi* | helium*) ;;
+  *) browser="chromium.desktop" ;;
+esac
+
+# head -1 closes the pipe early and SIGPIPEs sed; guard the pipeline so it
+# can't fail under pipefail/set -e.
+exec_path=$(sed -n 's/^Exec=\([^ ]*\).*/\1/p' {~/.local,~/.nix-profile,/usr}/share/applications/$browser 2>/dev/null | head -1) || true
+[[ -n "$exec_path" ]] || exec_path="chromium"
+
+if [[ -n "$url" ]]; then
+  exec setsid uwsm-app -- "$exec_path" --profile-directory="$profile" --app="$url"
+else
+  exec setsid uwsm-app -- "$exec_path" --profile-directory="$profile"
+fi

@@ -30,6 +30,7 @@ Commands:
   rename-context <id> <name>        Rename a context
   set-shortcut <id> <shortcut>      Change a context's keybinding letter
   set-icon <id> <icon>              Change a context's icon
+  set-profile <id> <profile|->      Set a context's Chrome profile (use - to clear)
   delete-context <id> [target]      Delete a context, moving its windows to [target]
   add-item <ctx> <title> <url> [icon]  Add a web item to a context
   rename-item <ctx> <old-title> <new-title>  Rename an item
@@ -110,6 +111,7 @@ case "$cmd" in
   rename-context) omarchy-shell context renameContext "${1:-}" "${2:-}" ;;
   set-shortcut)  omarchy-shell context setShortcut "${1:-}" "${2:-}" ;;
   set-icon)      omarchy-shell context setIcon "${1:-}" "${2:-}" ;;
+  set-profile)   if [[ "${2:-}" == "-" ]]; then omarchy-shell context setChromeProfile "${1:-}" ""; else omarchy-shell context setChromeProfile "${1:-}" "${2:-}"; fi ;;
   delete-context) omarchy-shell context deleteContext "${1:-}" "${2:-}" ;;
   add-item)      omarchy-shell context addItem "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
   rename-item)   omarchy-shell context renameItem "${1:-}" "${2:-}" "${3:-}" ;;
