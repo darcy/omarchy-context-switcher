@@ -95,6 +95,20 @@ function slotForWorkspace(config, wsId) {
   return wsId - base + 1
 }
 
+// Normalize a name into a kebab-case context id.
+function slugify(value) {
+  return String(value || "").trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "")
+}
+
+// A single uppercase letter shortcut, or "" if the input is empty/invalid.
+function normalizeShortcut(value) {
+  var s = String(value || "").trim().toUpperCase()
+  return s ? s.charAt(0) : ""
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     contextBase: contextBase,
@@ -109,6 +123,8 @@ if (typeof module !== "undefined") {
     monitorContext: monitorContext,
     setMonitorContext: setMonitorContext,
     setLastWorkspace: setLastWorkspace,
-    slotForWorkspace: slotForWorkspace
+    slotForWorkspace: slotForWorkspace,
+    slugify: slugify,
+    normalizeShortcut: normalizeShortcut
   }
 }

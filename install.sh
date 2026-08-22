@@ -29,12 +29,12 @@ if [[ -e "$PLUGIN_DST/manifest.json" ]]; then
 fi
 rm -rf "$PLUGIN_DST"
 mkdir -p "$PLUGIN_DST"
-cp -a "$REPO/manifest.json" "$REPO/ContextService.qml" "$REPO/ContextBarWidget.qml" "$REPO/ContextModel.js" "$PLUGIN_DST/"
+cp -a "$REPO/manifest.json" "$REPO/ContextService.qml" "$REPO/ContextBarWidget.qml" "$REPO/ContextMenuPanel.qml" "$REPO/ContextModel.js" "$PLUGIN_DST/"
 echo "Installed plugin to $PLUGIN_DST"
 
 # 2. CLI + generator scripts -> ~/.local/bin/
 echo "--- CLI ---"
-for f in omarchy-context omarchy-context-generate omarchy-context-move-workspace omarchy-context-disable omarchy-context-teardown omarchy-context-setup; do
+for f in omarchy-context omarchy-context-generate omarchy-context-move-workspace omarchy-context-delete-context omarchy-context-disable omarchy-context-teardown omarchy-context-setup; do
   if [[ -f "$BIN_DIR/$f" ]]; then cp -a "$BIN_DIR/$f" "$BACKUP_DIR/" 2>/dev/null || true; fi
   cp "$REPO/bin/$f" "$BIN_DIR/$f"
   chmod +x "$BIN_DIR/$f"
@@ -70,14 +70,16 @@ LUA
     echo "bindings.lua already sources context-bindings (or missing)"
   fi
 
-  # 5. Menu extension -> ~/.config/omarchy/extensions/omarchy-menu.jsonc
+  # 6. Menu extension -> ~/.config/omarchy/extensions/omarchy-menu.jsonc
+  #    The launcher is the system menu (fast, searchable); management actions
+  #    inside it summon the editor.
   echo "--- Menu extension ---"
   mkdir -p "$HOME/.config/omarchy/extensions"
   "$BIN_DIR/omarchy-context-generate" --menu > "$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
   echo "Wrote menu extension"
   omarchy menu refresh >/dev/null 2>&1 || true
 
-# 6. Enable the plugin (idempotent).
+# 8. Enable the plugin (idempotent).
 echo "--- Enable plugin ---"
 omarchy plugin enable "$PLUGIN_ID" >/dev/null 2>&1 || echo "  (plugin enable reported non-zero; may already be enabled or need a shell rescan)"
 

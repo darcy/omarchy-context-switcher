@@ -1,0 +1,111 @@
+#!/bin/bash
+# omarchy-context-delete-context: remove a context from config.json without
+# orphaning workspaces. Every window sitting in the deleted context's
+# workspace range is moved into the target context (or, when none is given
+# or only one context remains, consolidated to a contiguous 1..N default set),
+# the context is removed from config, persisted state is cleaned, and the
+# Hyprland keybindings are regenerated.
+#
+# Usage: omarchy-context-delete-context <id> [target_id]
+set -euo pipefail
+
+id="${1:?Usage: $0 <id> [target_id]}"
+target_id="${2:-}"
+CONFIG="$HOME/.config/context-switcher/config.json"
+STATE="$HOME/.local/state/context-switcher/context.json"
+export PATH="$HOME/.local/share/omarchy/bin:$PATH"
+
+python3 - "$id" "$target_id" "$CONFIG" "$STATE" <<'PY'
+import json, os, sys, subprocess, shlex, time
+
+def run(c):
+    return subprocess.run(c, shell=True, capture_output=True, text=True)
+
+def dsp(e):
+    run("hyprctl eval " + shlex.quote("hl.dispatch(" + e + ")"))
+
+def move_ws(src, dst):
+    if src == dst:
+        return
+    try:
+        clients = json.loads(run("hyprctl clients -j").stdout)
+    except Exception:
+        return
+    for c in clients:
+        if c.get("workspace", {}).get("id") == src:
+            dsp(f'hl.dsp.window.move({{ workspace = "{dst}", follow = false, window = "address:{c["address"]}" }})')
+            time.sleep(0.04)
+    dsp(f'hl.dsp.focus({{ workspace = "{dst}" }})')
+
+cid, target_id, CONFIG, STATE = sys.argv[1:5]
+
+with open(CONFIG) as f:
+    cfg = json.load(f)
+ctxs = cfg.get("contexts", [])
+slots = cfg.get("slots", 10)
+idx = next((i for i, c in enumerate(ctxs) if c.get("id") == cid), -1)
+if idx < 0:
+    sys.exit(0)
+
+if target_id and target_id != cid and any(c.get("id") == target_id for c in ctxs):
+    tctx = target_id
+else:
+    others = [c.get("id") for c in ctxs if c.get("id") != cid]
+    tctx = others[0] if others else ""
+
+base = idx * slots + 1
+try:
+    wsl = json.loads(run("hyprctl workspaces -j").stdout)
+except Exception:
+    wsl = []
+occupied = sorted(int(w["id"]) for w in wsl
+                  if base <= int(w.get("id", 0)) < base + slots and w.get("windows", 0) > 0)
+
+def first_empty(ctxid, taken):
+    b = next(i for i, c in enumerate(cfg["contexts"]) if c.get("id") == ctxid) * slots + 1
+    for s in range(1, slots + 1):
+        w = b + s - 1
+        if w not in taken:
+            return w
+    return b
+
+taken = set()
+if tctx:
+    for src in occupied:
+        dst = first_empty(tctx, taken)
+        taken.add(dst)
+        move_ws(src, dst)
+else:
+    # Last context: consolidate its windows to 1..N, like the teardown path.
+    targets = list(range(1, len(occupied) + 1))
+    for src, dst in zip(occupied, targets):
+        move_ws(src, dst)
+
+cfg["contexts"] = [c for c in ctxs if c.get("id") != cid]
+tmp = CONFIG + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(cfg, f, indent=2)
+os.replace(tmp, CONFIG)
+
+if os.path.exists(STATE):
+    try:
+        with open(STATE) as f:
+            st = json.load(f)
+        changed = False
+        if cid in st.get("last_workspace", {}):
+            st["last_workspace"].pop(cid, None)
+            changed = True
+        mc = st.get("monitor_context", {})
+        for k in [k for k, v in mc.items() if v == cid]:
+            mc.pop(k, None)
+            changed = True
+        if changed:
+            with open(STATE, "w") as f:
+                json.dump(st, f)
+    except Exception:
+        pass
+PY
+
+# Deleting a context removes its shortcut binding; regenerate and reload.
+omarchy-context-generate --bindings > "$HOME/.config/hypr/context-bindings.lua"
+hyprctl reload >/dev/null 2>&1 || true

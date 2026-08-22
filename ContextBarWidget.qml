@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Hyprland
+import Quickshell.Io
 import qs.Ui
 import qs.Commons
 import "ContextModel.js" as Model
@@ -24,6 +25,10 @@ BarWidget {
 
   readonly property int slots: (service && service.config && service.config.slots) || 10
   readonly property bool ready: service && service.configLoaded
+
+  // The launcher is the system menu; the editor is owned by the service. This
+  // widget only manages: show context name + slots. Left click opens the
+  // context menu, right click advances context.
 
   // Bumped on any relevant change so slot property bindings re-evaluate.
   property int revision: 0
@@ -141,15 +146,20 @@ BarWidget {
     rowSpacing: root.vertical ? Style.space(2) : 0
 
     // Context label — full name horizontally, trigger letter when vertical.
+    // Click opens the context popup (picker), right-click advances context.
     WidgetButton {
+      id: contextButton
       bar: root.bar
       text: root.vertical ? root.contextShortcut : root.contextName
       horizontalMargin: 6
       verticalPadding: 6
       fixedWidth: root.vertical ? root.barSize : -1
       fixedHeight: root.barSize
-      tooltipText: (root.vertical ? root.contextName + "\n" : "") + "Context (click: next)"
-      onPressed: function() { if (root.bar) root.bar.run("omarchy-context next") }
+      tooltipText: (root.vertical ? root.contextName + "\n" : "") + "Context (click: menu, right: next)"
+      onPressed: function(b) {
+        if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-context next") }
+        else if (root.bar) root.bar.run("omarchy menu summon contexts")
+      }
     }
 
     // Slot indicators

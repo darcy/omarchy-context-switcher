@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
+import qs.Commons
 import "ContextModel.js" as Model
 
 // Context Switcher service.
@@ -415,6 +416,195 @@ Item {
     root.refreshWorkspaces()
   }
 
+  // ---- Config editing (used by the popup) ----
+  //
+  // Mutations rewrite ~/.config/context-switcher/config.json atomically via
+  // jq (temp file + rename), then reload the config and — for structural
+  // changes that move keybindings — regenerate the Hyprland binds. Callers
+  // get their changes reflected through configLoaded / refreshRequested.
+
+  Process {
+    id: mutateProc
+    property bool regen: false
+    property var onDone: null
+    onExited: function(exitCode, exitStatus) {
+      if (exitCode !== 0 || exitStatus !== 0) {
+        root.lastError = "config write failed"
+        return
+      }
+      root.lastError = ""
+      root.loadConfig()
+      if (mutateProc.regen) root.regenerateBindings()
+      root.regenerateMenu()
+      root.refreshCurrentContext()
+      root.refreshRequested()
+      root.stateUpdated()
+      var cb = mutateProc.onDone
+      mutateProc.onDone = null
+      if (cb) cb()
+    }
+  }
+
+  // Runs a jq filter against the config, passing caller values via --arg so
+  // no value is ever embedded inside a quoted shell/jq literal (avoids nested
+  // quoting entirely). On success reloads config and, optionally, regenerates
+  // keybindings.
+  function runMutation(jqFilter, args, regen, onDone) {
+    var argv = ["jq"]
+    for (var k in (args || {})) argv.push("--arg", k, String(args[k]))
+    argv.push(jqFilter, root.configFile)
+    var quoted = []
+    for (var i = 0; i < argv.length; i++) quoted.push(Util.shellQuote(argv[i]))
+    var tmp = root.configFile + ".tmp"
+    var cmd = quoted.join(" ") + " > " + Util.shellQuote(tmp) +
+              " && mv " + Util.shellQuote(tmp) + " " + Util.shellQuote(root.configFile)
+    mutateProc.regen = regen
+    mutateProc.onDone = onDone || null
+    mutateProc.command = ["bash", "-lc", cmd]
+    mutateProc.running = true
+  }
+
+  function renameContext(id, name) {
+    runMutation("(.contexts = [.contexts[] | if .id == $id then .name = $name else . end])",
+      { id: id, name: name }, false)
+  }
+
+  function setContextShortcut(id, shortcut) {
+    runMutation("(.contexts = [.contexts[] | if .id == $id then .shortcut = $shortcut else . end])",
+      { id: id, shortcut: Model.normalizeShortcut(shortcut) }, true)
+  }
+
+  function setContextIcon(id, icon) {
+    runMutation("(.contexts = [.contexts[] | if .id == $id then .icon = $icon else . end])",
+      { id: id, icon: icon || "" }, false)
+  }
+
+  function addContext(name, shortcut, icon) {
+    var slug = Model.slugify(name)
+    if (!slug) { root.lastError = "context name must not be empty"; return "error" }
+    if (Model.contextExists(root.config, slug)) { root.lastError = "context already exists: " + slug; return "error" }
+    runMutation(".contexts += [{id: $slug, name: $name, shortcut: $shortcut, icon: $icon, menu: []}]",
+      { slug: slug, name: name, shortcut: Model.normalizeShortcut(shortcut), icon: icon || "" }, true)
+    return "ok"
+  }
+
+  function deleteContext(id, targetId) {
+    if (!Model.contextExists(root.config, id)) { root.lastError = "unknown context: " + id; return "unknown" }
+    var cmd = "omarchy-context-delete-context " + Util.shellQuote(id)
+    if (targetId && targetId !== id) cmd += " " + Util.shellQuote(targetId)
+    deleteProc.command = ["bash", "-lc", cmd]
+    deleteProc.running = true
+    return "ok"
+  }
+
+  function addItem(contextId, label, url, icon) {
+    if (!Model.contextExists(root.config, contextId)) { root.lastError = "unknown context: " + contextId; return "unknown" }
+    if (!label) { root.lastError = "item title must not be empty"; return "error" }
+    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu += [{label: $label, icon: $icon, type: \"web\", url: $url}] else . end])",
+      { cid: contextId, label: label, url: url, icon: icon || "" }, false)
+    return "ok"
+  }
+
+  function renameItem(contextId, oldLabel, newLabel) {
+    runMutation("((.contexts[] | select(.id == $cid)).menu = [(.contexts[] | select(.id == $cid)).menu[] | if .label == $old then .label = $new else . end])",
+      { cid: contextId, old: oldLabel, new: newLabel }, false)
+  }
+
+  function setItemIcon(contextId, label, icon) {
+    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu = [.menu[] | if .label == $label then .icon = $icon else . end] else . end])",
+      { cid: contextId, label: label, icon: icon || "" }, false)
+  }
+
+  function deleteItem(contextId, label) {
+    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu = [.menu[] | select(.label != $label)] else . end])",
+      { cid: contextId, label: label }, false)
+  }
+
+  // Add a fully-formed item (label, icon, type + type-specific fields) to a
+  // context's menu. itemJson is the complete item object.
+  function addItemObject(contextId, itemJson) {
+    if (!Model.contextExists(root.config, contextId)) { root.lastError = "unknown context: " + contextId; return "unknown" }
+    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu += [$item | fromjson] else . end])",
+      { cid: contextId, item: itemJson }, false)
+    return "ok"
+  }
+
+  // Replace the menu item whose label == oldLabel with a fully-formed object.
+  function updateItem(contextId, oldLabel, itemJson) {
+    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu = [.menu[] | if .label == $old then ($item | fromjson) else . end] else . end])",
+      { cid: contextId, old: oldLabel, item: itemJson }, false)
+    return "ok"
+  }
+
+  // Regenerate the Hyprland keybindings from the current config and reload.
+  // hyprctl reload is async: it returns before the compositor finishes
+  // re-parsing, and a second reload fired in quick succession can be dropped,
+  // leaving the regenerated binds unloaded. Verify the regenerated binding
+  // actually landed in `hyprctl binds` and retry the reload until it does.
+  function regenerateBindings() {
+    var p = dispatchProc
+    p.command = ["bash", "-lc",
+      "omarchy-context-generate --bindings > \"$HOME/.config/hypr/context-bindings.lua\"\n" +
+      "for i in $(seq 1 25); do\n" +
+      "  hyprctl reload >/dev/null 2>&1\n" +
+      "  sleep 0.1\n" +
+      "  if hyprctl binds 2>/dev/null | grep -q 'omarchy-context menu'; then exit 0; fi\n" +
+      "done\nexit 1"]
+    p.running = true
+  }
+
+  // Regenerate the system-menu extension and tell the Menu plugin to reload
+  // it, so the launcher reflects config edits (add/edit/delete items, renames,
+  // shortcut/icon changes). Uses its own Process so it never collides with the
+  // binding regeneration on dispatchProc.
+  function regenerateMenu() {
+    var p = menuProc
+    p.command = ["bash", "-lc",
+      "omarchy-context-generate --menu > \"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\" && " +
+      "omarchy menu refresh >/dev/null 2>&1"]
+    p.running = true
+  }
+
+  Process { id: menuProc }
+
+  // ---- Context popup (centered overlay) ----
+  //
+  // Hosted here (the service is keepLoaded) so the popup is a standalone,
+  // screen-centered menu — not anchored to or rendered by the bar widget.
+  // The bar widget only summons it; everything else lives here.
+  property var popup: popupLoader.item
+
+  function openPopup(contextId) {
+    var p = root.popup
+    if (!p) return "error"
+    p.requestContext = contextId || ""
+    p.open()
+    return "ok"
+  }
+  function togglePopup() { if (root.popup) root.popup.toggle(); return "ok" }
+  function closePopup() { if (root.popup) root.popup.close(); return "ok" }
+
+  // Open the editor at a specific management view (used by the system menu's
+  // management actions). view: editContextNew | editContext | items | editItem.
+  function openEditor(view, contextId, itemIndex) {
+    var p = root.popup
+    if (!p) return "error"
+    p.requestMode = view
+    p.requestContext = contextId || ""
+    p.requestItemIndex = (itemIndex === undefined || itemIndex === null) ? -1 : itemIndex
+    p.open()
+    return "ok"
+  }
+
+  Loader {
+    id: popupLoader
+    active: true
+    source: Qt.resolvedUrl("ContextMenuPanel.qml")
+    onLoaded: {
+      popupLoader.item.service = root
+    }
+  }
+
   // ---- Setup / wiring ----
 
   Process {
@@ -439,6 +629,26 @@ Item {
 
   Process {
     id: dispatchProc
+  }
+
+  // Owns the delete-context helper, which moves workspaces into a target
+  // context and rewrites config + state in one detached pass. Reloads on
+  // success so the popup/bar reflect the removal.
+  Process {
+    id: deleteProc
+    onExited: function(exitCode, exitStatus) {
+      if (exitCode === 0 && exitStatus === 0) {
+        root.lastError = ""
+        root.loadConfig()
+        root.loadState()
+        root.regenerateMenu()
+      } else {
+        root.lastError = "context delete failed"
+      }
+      root.refreshCurrentContext()
+      root.refreshRequested()
+      root.stateUpdated()
+    }
   }
 
   // One-time startup seed of the authoritative monitor -> activeWorkspace map.
@@ -574,6 +784,23 @@ Item {
     function current(): string { return root.currentContextName() }
     function list(): string { return root.listContexts() }
     function validate(): string { return root.validateConfig() }
+    function renameContext(id: string, name: string): string { root.renameContext(id, name); return "ok" }
+    function setShortcut(id: string, shortcut: string): string { root.setContextShortcut(id, shortcut); return "ok" }
+    function setIcon(id: string, icon: string): string { root.setContextIcon(id, icon); return "ok" }
+    function addContext(name: string, shortcut: string, icon: string): string { return root.addContext(name, shortcut, icon) }
+    function deleteContext(id: string, targetId: string): string { return root.deleteContext(id, targetId) }
+    function addItem(contextId: string, label: string, url: string, icon: string): string { return root.addItem(contextId, label, url, icon) }
+    function renameItem(contextId: string, oldLabel: string, newLabel: string): string { root.renameItem(contextId, oldLabel, newLabel); return "ok" }
+    function setItemIcon(contextId: string, label: string, icon: string): string { root.setItemIcon(contextId, label, icon); return "ok" }
+    function deleteItem(contextId: string, label: string): string { root.deleteItem(contextId, label); return "ok" }
+    function addItemObject(contextId: string, itemJson: string): string { return root.addItemObject(contextId, itemJson) }
+    function updateItem(contextId: string, oldLabel: string, itemJson: string): string { return root.updateItem(contextId, oldLabel, itemJson) }
+    function menu(contextId: string): string { return root.openPopup(contextId) }
+    function popup(): string { return root.openPopup("") }
+    function openPopup(contextId: string): string { return root.openPopup(contextId) }
+    function togglePopup(): string { return root.togglePopup() }
+    function closePopup(): string { return root.closePopup() }
+    function edit(view: string, contextId: string, itemIndex: int): string { return root.openEditor(view, contextId, itemIndex) }
     function status(): string {
       return JSON.stringify({ configLoaded: root.configLoaded, stateLoaded: root.stateLoaded,
         focusedMonitor: root.focusedMonitorName, currentContext: root.currentContextId,

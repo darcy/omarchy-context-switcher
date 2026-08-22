@@ -19,8 +19,22 @@ Commands:
   prev                  Switch to previous context
   current               Print current context name
   list                  List all contexts
-  create-context <name> <shortcut> [icon]  Create a new context
-  delete-context <id>   Delete a context
+  menu [context]        Open the system menu (picker, or a context's items)
+  edit new              Open the editor to add a context
+  edit <ctx>            Open the editor for a context
+  edit-item <ctx> add   Open the editor to add an item
+  edit-item <ctx> <i>   Open the editor to edit item index <i>
+  edit-json             Edit the config file
+  add-context <name> <shortcut> [icon]  Create a new context
+  create-context <name> <shortcut> [icon]  Alias for add-context
+  rename-context <id> <name>        Rename a context
+  set-shortcut <id> <shortcut>      Change a context's keybinding letter
+  set-icon <id> <icon>              Change a context's icon
+  delete-context <id> [target]      Delete a context, moving its windows to [target]
+  add-item <ctx> <title> <url> [icon]  Add a web item to a context
+  rename-item <ctx> <old-title> <new-title>  Rename an item
+  set-item-icon <ctx> <title> <icon>  Change an item's icon
+  delete-item <ctx> <title>        Delete an item from a context
   validate              Validate config.json
   status                Print service status JSON
 EOF
@@ -86,8 +100,21 @@ case "$cmd" in
   prev)          omarchy-shell context prev ;;
   current)       omarchy-shell context current ;;
   list)          omarchy-shell context list ;;
-  create-context) cmd_create_context "${1:-}" "${2:-}" "${3:-}" ;;
-  delete-context) cmd_delete_context "${1:-}" ;;
+  menu)          if [[ -n "${1:-}" ]]; then omarchy menu summon "contexts.${1:-}"; else omarchy menu summon contexts; fi ;;
+  edit)          if [[ "${1:-}" == "new" ]]; then omarchy-shell context edit editContextNew "" 0
+                 else omarchy-shell context edit editContext "${1:-}" 0; fi ;;
+  edit-item)     if [[ "${2:-}" == "add" ]]; then omarchy-shell context edit editItem "${1:-}" -1
+                 else omarchy-shell context edit editItem "${1:-}" "${2:-}"; fi ;;
+  edit-json)     alacritty --title 'context-switcher config' -e nvim ~/.config/context-switcher/config.json ;;
+  add-context|create-context) omarchy-shell context addContext "${1:-}" "${2:-}" "${3:-}" ;;
+  rename-context) omarchy-shell context renameContext "${1:-}" "${2:-}" ;;
+  set-shortcut)  omarchy-shell context setShortcut "${1:-}" "${2:-}" ;;
+  set-icon)      omarchy-shell context setIcon "${1:-}" "${2:-}" ;;
+  delete-context) omarchy-shell context deleteContext "${1:-}" "${2:-}" ;;
+  add-item)      omarchy-shell context addItem "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+  rename-item)   omarchy-shell context renameItem "${1:-}" "${2:-}" "${3:-}" ;;
+  set-item-icon) omarchy-shell context setItemIcon "${1:-}" "${2:-}" "${3:-}" ;;
+  delete-item)   omarchy-shell context deleteItem "${1:-}" "${2:-}" ;;
   validate)      omarchy-shell context validate ;;
   status)        omarchy-shell context status ;;
   -h|--help|help) usage ;;
