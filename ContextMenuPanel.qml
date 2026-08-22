@@ -46,6 +46,8 @@ Panel {
   property string itemType: "web"
   property string chromeProfile: ""
   property var chromeProfileOptions: []
+  property var reorderOrder: []
+  property int reorderSelected: 0
 
   property var service: null
   readonly property var config: (service && service.config) ? service.config : { contexts: [], slots: 10 }
@@ -112,12 +114,14 @@ Panel {
       if (root.requestItemIndex >= 0) root.startEditItem(root.requestContext, root.requestItemIndex)
       else root.startAddItem(root.requestContext)
     }
+    else if (root.requestMode === "reorder") root.startReorder(root.requestContext)
     root.requestMode = ""
     root.requestContext = ""
     root.requestItemIndex = -1
     root.controller.show()
     if (root.view === "editContext") root.focusField(ctxNameField)
-    else root.focusField(itemTitleField)
+    else if (root.view === "editItem") root.focusField(itemTitleField)
+    else root.focusField(reorderList)
   }
 
   function close() { root.controller.hide() }
@@ -148,6 +152,7 @@ Panel {
 
   function goBack() {
     if (root.confirmOpen) { root.confirmOpen = false; return }
+    if (root.view === "reorder") { root.commitReorder(); return }
     if (root.view === "editItem") root.returnToSystemMenu("contexts." + root.contextId + ".menu.~edit")
     else root.returnToSystemMenu(root.editingAdd ? "" : "contexts." + root.contextId)
   }
@@ -290,12 +295,58 @@ Panel {
     Qt.callLater(function() { confirmGrab.forceActiveFocus() })
   }
 
+  // ---- Reorder items ----
+
+  function startReorder(cid) {
+    var c = root.contextById(cid)
+    if (!c || !c.menu) return
+    root.contextId = cid
+    root.reorderOrder = c.menu.slice()
+    root.reorderSelected = 0
+    root.view = "reorder"
+    root.focusField(reorderList)
+  }
+
+  function selectReorder(dy) {
+    if (root.reorderOrder.length === 0) return
+    var n = root.reorderOrder.length
+    root.reorderSelected = (root.reorderSelected + dy + n) % n
+    reorderList.positionViewAtIndex(root.reorderSelected, ListView.Contain)
+  }
+
+  function moveReorder(dy) {
+    var from = root.reorderSelected
+    var to = from + dy
+    if (to < 0 || to >= root.reorderOrder.length) return
+    var arr = root.reorderOrder.slice()
+    var it = arr.splice(from, 1)[0]
+    arr.splice(to, 0, it)
+    root.reorderOrder = arr
+    root.reorderSelected = to
+    reorderList.positionViewAtIndex(to, ListView.Contain)
+  }
+
+  // Commit the reordered list to the config, then close the editor entirely.
+  function commitReorder() {
+    if (service && root.reorderOrder.length)
+      service.reorderItems(root.contextId, JSON.stringify(root.reorderOrder))
+    root.close()
+  }
+
   readonly property int headerHeight: Style.space(40)
+  readonly property color selectedBg: Util.alpha(fg, 0.10)
   readonly property int pad: Style.spacing.popupPadding
   readonly property int cardWidth: Math.min(panel.width - Style.gapsOut * 2, Style.space(380))
-  readonly property int contentH: root.headerHeight + formColumn.implicitHeight
+  readonly property int reorderRowHeight: Math.max(Style.space(40), Math.round(Style.font.body * 1.6))
+  readonly property int reorderMaxHeight: Math.round((panel.height - Style.gapsOut * 2) * 0.6)
+  readonly property int reorderListHeight: Math.min(reorderOrder.length * (reorderRowHeight + Style.spacing.xs), reorderMaxHeight)
+  readonly property int contentH: root.view === "reorder"
+    ? (root.headerHeight + root.reorderListHeight)
+    : (root.headerHeight + formColumn.implicitHeight)
   readonly property int cardHeight: Math.min(panel.height - Style.gapsOut * 2, contentH + pad * 2)
   readonly property string headerTitle: {
+    if (root.view === "reorder")
+      return "Reorder Items \u2014 " + ((root.currentContext && root.currentContext.name) || root.contextId || "")
     if (root.view === "editContext") return root.editingAdd ? "New context" : "Edit context"
     return root.itemAddMode ? "Add item" : "Edit item"
   }
@@ -341,7 +392,7 @@ Panel {
         id: keyCatcher
         anchors.fill: parent
         focus: true
-        blocked: root.confirmOpen || root.editingText || ctxProfileDropdown.popupOpen
+        blocked: root.confirmOpen || root.editingText || ctxProfileDropdown.popupOpen || root.view === "reorder"
         onMoveRequested: function(dx, dy) { if (dx < 0) root.goBack() }
         onCloseRequested: root.goBack()
         onTabRequested: function(d) { root.switchPanel(d) }
@@ -566,7 +617,94 @@ Panel {
               }
             }
           }
+
+        Column {
+          visible: root.view === "reorder"
+          width: parent.width
+          spacing: Style.spacing.xs
+
+          Text {
+            width: parent.width
+            text: "\u2191/\u2193 move cursor  \u00b7  Shift+\u2191/\u2193 reorder  \u00b7  Esc done"
+            color: root.dim
+            font.family: root.fam
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
+          ListView {
+            id: reorderList
+            width: parent.width
+            height: root.reorderListHeight
+            clip: true
+            model: root.reorderOrder
+            spacing: Style.spacing.xs
+            boundsBehavior: Flickable.StopAtBounds
+            focus: true
+
+            Keys.onPressed: function(event) {
+              if (root.view !== "reorder") return
+              var shift = event.modifiers & Qt.ShiftModifier
+              if (event.key === Qt.Key_Escape || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                root.commitReorder(); event.accepted = true; return
+              }
+              if (event.key === Qt.Key_Up) { if (shift) root.moveReorder(-1); else root.selectReorder(-1); event.accepted = true; return }
+              if (event.key === Qt.Key_Down) { if (shift) root.moveReorder(1); else root.selectReorder(1); event.accepted = true; return }
+              if (event.text === "j" || event.text === "J") { root.selectReorder(1); event.accepted = true; return }
+              if (event.text === "k" || event.text === "K") { root.selectReorder(-1); event.accepted = true; return }
+            }
+
+            delegate: BorderSurface {
+              required property int index
+              required property var modelData
+
+              readonly property bool hasCursor: root.view === "reorder" && root.reorderSelected === index
+
+              width: ListView.view.width
+              height: root.reorderRowHeight
+              radius: Style.cornerRadius
+              color: hasCursor ? root.selectedBg : "transparent"
+              borderSpec: hasCursor ? Border.flat(root.acc, Math.max(1, Style.normalBorderWidth)) : Border.none()
+
+              RowLayout {
+                anchors.fill: parent
+                spacing: Style.space(8)
+
+                Text {
+                  Layout.preferredWidth: Style.space(24)
+                  Layout.alignment: Qt.AlignVCenter
+                  text: modelData.icon || ""
+                  color: root.fg
+                  font.family: root.fam
+                  font.pixelSize: Style.font.icon
+                  horizontalAlignment: Text.AlignHCenter
+                }
+
+                Text {
+                  Layout.fillWidth: true
+                  Layout.alignment: Qt.AlignVCenter
+                  text: modelData.label || "(untitled)"
+                  color: root.fg
+                  font.family: root.fam
+                  font.pixelSize: Style.font.body
+                  elide: Text.ElideRight
+                }
+              }
+            }
+          }
+
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(8)
+            Item { Layout.fillWidth: true }
+            Button {
+              text: "Done"
+              accent: Color.accent
+              onClicked: root.commitReorder()
+            }
+          }
         }
+      }
       }
 
       ConfirmDialog {

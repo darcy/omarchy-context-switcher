@@ -109,6 +109,7 @@ gen_menu() {
       | .["contexts." + $cid + ".menu.~edit.menu"] = { icon: "󰏪", label: ("Edit " + ($ctx.name // $cid)) }
       | .["contexts." + $cid + ".menu.~edit.menu.!details"] = { icon: "󰏪", label: "Edit details", action: ("omarchy-context edit " + $cid) }
       | .["contexts." + $cid + ".menu.~edit.menu.!add"] = { icon: "󰐕", label: "Add item", action: ("omarchy-context edit-item " + $cid + " add") }
+      | .["contexts." + $cid + ".menu.~edit.menu.!reorder"] = { icon: "", label: "Reorder Items", action: ("omarchy-context reorder " + $cid) }
       | reduce range(0; ($ctx.menu | length)) as $i (.;
           $ctx.menu[$i] as $it |
           .["contexts." + $cid + ".menu.~edit.menu.e" + ($i|tostring)] =

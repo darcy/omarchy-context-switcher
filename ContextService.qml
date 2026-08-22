@@ -536,6 +536,15 @@ Item {
     return "ok"
   }
 
+  // Replace a context's entire menu with a reordered list (array of item
+  // objects, serialized as menuJson).
+  function reorderItems(contextId, menuJson) {
+    if (!Model.contextExists(root.config, contextId)) { root.lastError = "unknown context: " + contextId; return "unknown" }
+    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu = ($menu | fromjson) else . end])",
+      { cid: contextId, menu: menuJson }, false)
+    return "ok"
+  }
+
   // Replace the menu item whose label == oldLabel with a fully-formed object.
   function updateItem(contextId, oldLabel, itemJson) {
     runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu = [.menu[] | if .label == $old then ($item | fromjson) else . end] else . end])",
@@ -803,6 +812,7 @@ Item {
     function deleteItem(contextId: string, label: string): string { root.deleteItem(contextId, label); return "ok" }
     function addItemObject(contextId: string, itemJson: string): string { return root.addItemObject(contextId, itemJson) }
     function updateItem(contextId: string, oldLabel: string, itemJson: string): string { return root.updateItem(contextId, oldLabel, itemJson) }
+    function reorderItems(contextId: string, menuJson: string): string { return root.reorderItems(contextId, menuJson) }
     function menu(contextId: string): string { return root.openPopup(contextId) }
     function popup(): string { return root.openPopup("") }
     function openPopup(contextId: string): string { return root.openPopup(contextId) }

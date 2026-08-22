@@ -24,6 +24,7 @@ Commands:
   edit <ctx>            Open the editor for a context
   edit-item <ctx> add   Open the editor to add an item
   edit-item <ctx> <i>   Open the editor to edit item index <i>
+  reorder <ctx>         Open the editor to reorder a context's items
   edit-json             Edit the config file
   add-context <name> <shortcut> [icon]  Create a new context
   create-context <name> <shortcut> [icon]  Alias for add-context
@@ -106,6 +107,7 @@ case "$cmd" in
                  else omarchy-shell context edit editContext "${1:-}" 0; fi ;;
   edit-item)     if [[ "${2:-}" == "add" ]]; then omarchy-shell context edit editItem "${1:-}" -1
                  else omarchy-shell context edit editItem "${1:-}" "${2:-}"; fi ;;
+  reorder)       omarchy-shell context edit reorder "${1:-}" 0 ;;
   edit-json)     alacritty --title 'context-switcher config' -e nvim ~/.config/context-switcher/config.json ;;
   add-context|create-context) omarchy-shell context addContext "${1:-}" "${2:-}" "${3:-}" ;;
   rename-context) omarchy-shell context renameContext "${1:-}" "${2:-}" ;;
