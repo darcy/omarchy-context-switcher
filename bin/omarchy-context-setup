@@ -1,0 +1,15 @@
+#!/bin/bash
+# omarchy-context-setup: when the Context Switcher plugin is enabled, hide the
+# default omarchy.workspaces widget and ensure context-switcher is in the bar.
+# Idempotent. Called from the service's Component.onCompleted.
+set -euo pipefail
+SHELL_JSON="$HOME/.config/omarchy/shell.json"
+[[ -f "$SHELL_JSON" ]] || exit 0
+# Only rewrite if the layout isn't already: context-switcher present, omarchy.workspaces absent.
+local_has_ctx=$(jq -r '[.bar.layout.left[]? | select(.id=="context-switcher")] | length' "$SHELL_JSON")
+local_has_ws=$(jq -r '[.bar.layout.left[]? | select(.id=="omarchy.workspaces")] | length' "$SHELL_JSON")
+if [[ "$local_has_ctx" -ge 1 && "$local_has_ws" -eq 0 ]]; then
+  exit 0
+fi
+jq '(.bar.layout.left) = ([.bar.layout.left[]? | select(.id != "omarchy.workspaces" and .id != "context-switcher")] + [{"id": "context-switcher"}])' \
+  "$SHELL_JSON" > "$SHELL_JSON.tmp" && mv "$SHELL_JSON.tmp" "$SHELL_JSON"

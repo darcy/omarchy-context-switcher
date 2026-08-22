@@ -1,0 +1,66 @@
+#!/bin/bash
+# omarchy-context-teardown: restore the default Omarchy workspace view after
+# the Context Switcher is disabled.
+#
+# 1. Restores omarchy.workspaces to the bar (replacing the context-switcher).
+# 2. Consolidates open workspaces to a contiguous default set (1..N).
+# 3. Removes the generated context bindings + menu extension.
+# 4. Reloads the shell.
+#
+# Called from the context-switcher service's Component.onDestruction when the
+# plugin is disabled (via any path). It does NOT disable the plugin itself.
+set -euo pipefail
+
+export PATH="$HOME/.local/share/omarchy/bin:$PATH"
+SHELL_JSON="$HOME/.config/omarchy/shell.json"
+
+# Self-guard: only proceed when the plugin is actually disabled, which a
+# bar-widget disable signals by removing the entry from bar.layout.left. On a
+# restart/reload the entry is still present, so we exit and do nothing.
+if [[ -f "$SHELL_JSON" ]] && jq -e '[.bar.layout.left[]? | select(.id == "context-switcher")] | length > 0' "$SHELL_JSON" >/dev/null 2>&1; then
+  exit 0
+fi
+BINDINGS_LUA="$HOME/.config/hypr/bindings.lua"
+CTX_BINDINGS="$HOME/.config/hypr/context-bindings.lua"
+MENU_EXT="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+
+# 1. Restore the default workspace widget to the bar.
+if [[ -f "$SHELL_JSON" ]]; then
+  cp -a "$SHELL_JSON" "$SHELL_JSON.bak.context-teardown"
+  jq '(.bar.layout.left) = (
+        [.bar.layout.left[] | select(.id != "context-switcher" and .id != "omarchy.workspaces")]
+        + [{"id": "omarchy.workspaces"}]
+      )' "$SHELL_JSON" > "$SHELL_JSON.tmp" && mv "$SHELL_JSON.tmp" "$SHELL_JSON"
+fi
+
+# 2. Consolidate open workspaces to a contiguous default set (1..N).
+python3 <<'PY'
+import json, subprocess, sys, shlex, time
+def run(c): return subprocess.run(c, shell=True, capture_output=True, text=True)
+def dsp(e): run("hyprctl eval " + shlex.quote("hl.dispatch(" + e + ")"))
+try:
+    wsj = json.loads(run("hyprctl workspaces -j").stdout)
+except Exception:
+    sys.exit(0)
+occupied = sorted(int(w["id"]) for w in wsj if int(w["id"]) > 0 and w.get("windows", 0) > 0)
+if not occupied:
+    sys.exit(0)
+targets = list(range(1, len(occupied) + 1))
+clients = json.loads(run("hyprctl clients -j").stdout)
+old_to_new = {o: n for o, n in zip(occupied, targets) if o != n}
+for old, new in old_to_new.items():
+    for addr in [c["address"] for c in clients if c.get("workspace", {}).get("id") == old]:
+        dsp(f'hl.dsp.window.move({{ workspace = "{new}", follow = false, window = "address:{addr}" }})')
+        time.sleep(0.05)
+PY
+
+# 3. Remove generated context bindings source + menu extension.
+if [[ -f "$BINDINGS_LUA" ]]; then
+  cp -a "$BINDINGS_LUA" "$BINDINGS_LUA.bak.context-teardown"
+  sed -i '/context-bindings.lua/d' "$BINDINGS_LUA"
+fi
+rm -f "$CTX_BINDINGS" "$MENU_EXT"
+
+# 4. Reload so the restored bar + default view take effect.
+hyprctl reload >/dev/null 2>&1 || true
+omarchy-shell shell reloadConfig >/dev/null 2>&1 || true

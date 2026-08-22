@@ -538,6 +538,23 @@ Item {
     // Seed the authoritative monitor map once from hyprctl; events keep it
     // fresh afterwards (no polling).
     Qt.callLater(function() { root.seedMonitors() })
+    // Set up the bar (hide omarchy.workspaces, show context-switcher). This
+    // makes enabling via any path (install.sh or omarchy plugin enable) behave
+    // identically. execDetached is a Quickshell singleton spawn that survives
+    // teardown, matching the disable path.
+    Quickshell.execDetached(["bash", "-lc", "omarchy-context-setup >/dev/null 2>&1"])
+  }
+
+  // On destruction (plugin disabled, or shell reload), run the teardown via a
+  // static detached spawn. execDetached is a Quickshell singleton method (not a
+  // child object), so it survives this component being torn down mid-disable —
+  // a child Process would die with us before it could launch.
+  //
+  // The teardown self-guards: it only acts if the plugin was really disabled
+  // (context-switcher gone from the bar layout), and exits immediately on a
+  // mere shell reload (where the entry is still present).
+  Component.onDestruction: {
+    Quickshell.execDetached(["bash", "-lc", "omarchy-context-teardown >/dev/null 2>&1"])
   }
 
   IpcHandler {
