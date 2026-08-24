@@ -665,6 +665,20 @@ Item {
       root.regenerateMenu()
   }
 
+  // Re-read config + state after an external edit (the "Edit Config" picker
+  // action) and regenerate the launcher menu and keybindings so they reflect
+  // it — the menu is also stale until the freshly loaded config propagates.
+  function reloadConfig() {
+    root.lastError = ""
+    root.loadConfig()
+    root.loadState()
+    root.regenerateBindings()
+    root.regenerateMenu()
+    root.refreshCurrentContext()
+    root.refreshRequested()
+    return "ok"
+  }
+
   Process { id: menuProc }
 
   // ---- Context popup (centered overlay) ----
@@ -888,6 +902,7 @@ Item {
     function current(): string { return root.currentContextName() }
     function list(): string { return root.listContexts() }
     function validate(): string { return root.validateConfig() }
+    function reloadConfig(): string { return root.reloadConfig() }
     function renameContext(id: string, name: string): string { root.renameContext(id, name); return "ok" }
     function setShortcut(id: string, shortcut: string): string { root.setContextShortcut(id, shortcut); return "ok" }
     function setIcon(id: string, icon: string): string { root.setContextIcon(id, icon); return "ok" }

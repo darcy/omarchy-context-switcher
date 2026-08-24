@@ -27,6 +27,7 @@ Commands:
   edit-item <ctx> <path>.add Open the editor to add an item inside the submenu at <path>
   reorder <ctx> [path]  Open the editor to reorder a context's items (or a submenu's, via path)
   edit-json             Edit the config file
+  reload                Reload the config (after editing it)
   add-item <ctx> <title> <url> [icon]  Add a web item to a context (top-level menu)
   rename-item <ctx> <old-title> <new-title>  Rename an item (top-level menu)
   set-item-icon <ctx> <title> <icon>  Change an item's icon (top-level menu)
@@ -103,6 +104,7 @@ case "$cmd" in
                  omarchy-shell context edit editItem "${1:-}" "${2:-}" ;;
   reorder)       omarchy-shell context edit reorder "${1:-}" "${2:-}" ;;
   edit-json)     alacritty --title 'context-switcher config' -e nvim ~/.config/context-switcher/config.json ;;
+  reload)        omarchy-shell context reloadConfig ;;
   add-context|create-context) omarchy-shell context addContext "${1:-}" "${2:-}" "${3:-}" ;;
   rename-context) omarchy-shell context renameContext "${1:-}" "${2:-}" ;;
   set-shortcut)  omarchy-shell context setShortcut "${1:-}" "${2:-}" ;;
