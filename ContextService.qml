@@ -653,8 +653,14 @@ Item {
   function regenerateMenu() {
     root.menuContextId = root.currentContextId
     var p = menuProc
+    // Write atomically: a failed generation (e.g. a temporarily invalid
+    // config being hand-edited) must never truncate the live extension out
+    // from under the launcher — the tmp file is only moved over on success.
+    var ext = "\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\""
+    var tmp = "\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc.tmp\""
     p.command = ["bash", "-lc",
-      "omarchy-context-generate --menu --context " + Util.shellQuote(root.currentContextId) + " > \"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\" && " +
+      "omarchy-context-generate --menu --context " + Util.shellQuote(root.currentContextId) + " > " + tmp + " && " +
+      "mv " + tmp + " " + ext + " && " +
       "omarchy menu refresh >/dev/null 2>&1"]
     p.running = true
   }
