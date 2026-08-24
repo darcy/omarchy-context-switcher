@@ -64,6 +64,15 @@ Panel {
   // Whether Shift is held while the move/edit list has keyboard focus — the
   // highlighted row then shows a move icon instead of the edit pencil.
   property bool shiftHeld: false
+  // Icon picker (search of the nerd-font cheat-sheet glyph map).
+  property string iconPickerTarget: ""
+  property string iconPickerReturn: "editContext"
+  property string iconPickerQuery: ""
+  property int iconPickerSelected: 0
+  property var iconDb: []
+  property var iconPickerItems: []
+  property bool iconPickerLoading: false
+  property string iconPickerError: ""
   property int moveSelected: 0
   property var moveTargets: []
   property bool moveNewMode: false
@@ -81,7 +90,8 @@ Panel {
 
   readonly property bool editingText: ctxNameField.activeFocus || ctxShortcutField.activeFocus ||
     ctxIconField.activeFocus || itemTitleField.activeFocus || itemIconField.activeFocus ||
-    itemUrlField.activeFocus || itemHostField.activeFocus || itemCommandField.activeFocus || itemWorkdirField.activeFocus
+    itemUrlField.activeFocus || itemHostField.activeFocus || itemCommandField.activeFocus || itemWorkdirField.activeFocus ||
+    iconSearchField.activeFocus
 
   function contextById(id) {
     return Model.contextById(config, id)
@@ -157,6 +167,22 @@ Panel {
     }
   }
 
+  Process {
+    id: iconProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyIconCache(text)
+    }
+  }
+
+  Process {
+    id: iconReadProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyIconDb(text)
+    }
+  }
+
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
       return root.bar.switchPanelFrom(root.barIdentity, direction)
@@ -174,6 +200,7 @@ Panel {
 
   function goBack() {
     if (root.confirmOpen) { root.confirmOpen = false; return }
+    if (root.view === "iconPicker") { root.cancelIconPicker(); return }
     if (root.view === "reorderMove") { root.cancelMoveToSubmenu(); return }
     if (root.view === "reorder") { root.commitReorder(); return }
     if (root.view === "manage") { root.startEditItem(root.contextId, root.managePath); return }
@@ -355,6 +382,84 @@ Panel {
   function addItemFromReorder() {
     root.editingFromReorder = true
     root.startAddItem(root.contextId, root.reorderPath)
+  }
+
+  // ---- Icon picker (nerd-font cheat-sheet search) ----
+
+  function iconGlyph(e) {
+    return String.fromCodePoint(parseInt("0x" + e.hex, 16))
+  }
+
+  function openIconPicker(target, returnView) {
+    root.iconPickerTarget = target
+    root.iconPickerReturn = returnView
+    root.iconPickerQuery = ""
+    root.iconPickerSelected = 0
+    root.view = "iconPicker"
+    root.ensureIconDb(false)
+    Qt.callLater(function() { root.focusField(iconSearchField) })
+  }
+
+  function ensureIconDb(refresh) {
+    if (!refresh && root.iconDb.length > 0) { root.applyIconFilter(); return }
+    root.iconPickerLoading = true
+    root.iconPickerError = ""
+    iconProc.command = ["bash", "-lc", "omarchy-context-icons" + (refresh ? " --refresh" : "") + " 2>/dev/null"]
+    iconProc.running = true
+  }
+
+  function applyIconCache(raw) {
+    root.iconPickerLoading = false
+    var text = String(raw || "").trim()
+    if (!text || text.indexOf("/") !== 0) {
+      root.iconPickerError = text || "Icon fetch failed (offline?)"
+      return
+    }
+    iconReadProc.command = ["bash", "-lc", "cat " + Util.shellQuote(text) + " 2>/dev/null || true"]
+    iconReadProc.running = true
+  }
+
+  function applyIconDb(raw) {
+    try { root.iconDb = JSON.parse(String(raw || "[]")) } catch (e) { root.iconDb = [] }
+    root.iconPickerError = root.iconDb.length ? "" : "Icon list is empty."
+    root.applyIconFilter()
+  }
+
+  function applyIconFilter() {
+    var q = root.iconPickerQuery.trim().toLowerCase()
+    var out = []
+    for (var i = 0; i < root.iconDb.length && out.length < 300; i++) {
+      var e = root.iconDb[i]
+      if (!q || e.name.toLowerCase().indexOf(q) >= 0 || e.set.indexOf(q) >= 0) out.push(e)
+    }
+    root.iconPickerItems = out
+    root.iconPickerSelected = Math.min(root.iconPickerSelected, Math.max(0, out.length - 1))
+  }
+
+  function selectIcon(dy) {
+    var n = root.iconPickerItems.length
+    if (n <= 0) return
+    root.iconPickerSelected = (root.iconPickerSelected + dy + n) % n
+    iconList.positionViewAtIndex(root.iconPickerSelected, ListView.Contain)
+  }
+
+  function pickIcon() {
+    var e = root.iconPickerItems[root.iconPickerSelected]
+    if (!e) return
+    var g = root.iconGlyph(e)
+    if (root.iconPickerTarget === "ctx") ctxIconField.text = g
+    else if (root.iconPickerTarget === "item") itemIconField.text = g
+    root.cancelIconPicker()
+  }
+
+  function cancelIconPicker() {
+    var target = root.iconPickerTarget
+    root.view = root.iconPickerReturn
+    root.iconPickerItems = []
+    Qt.callLater(function() {
+      if (target === "ctx") root.focusField(ctxIconField)
+      else if (target === "item") root.focusField(itemIconField)
+    })
   }
 
   // After saving/cancelling/deleting an item opened from the move/edit list,
@@ -648,15 +753,20 @@ Panel {
   readonly property int reorderMoveListHeight: Math.min(root.moveTargets.length * (root.reorderRowHeight + Style.spacing.xs), root.reorderMaxHeight)
   readonly property int reorderMoveExtra: root.moveNewMode ? (Style.space(64)) : 0
   readonly property int reorderMoveColumnHeight: root.reorderMoveListHeight + root.reorderMoveExtra
+  readonly property int iconPickerListHeight: Math.min(root.iconPickerItems.length * (root.reorderRowHeight + Style.spacing.xs), root.reorderMaxHeight)
   readonly property int contentH: root.view === "reorder"
     ? (root.headerHeight + reorderColumn.implicitHeight)
     : (root.view === "reorderMove"
       ? (root.headerHeight + root.reorderMoveColumnHeight)
-      : (root.view === "manage"
-        ? (root.headerHeight + manageColumn.implicitHeight)
-        : (root.headerHeight + formColumn.implicitHeight)))
+      : (root.view === "iconPicker"
+        ? (root.headerHeight + iconPickerColumn.implicitHeight)
+        : (root.view === "manage"
+          ? (root.headerHeight + manageColumn.implicitHeight)
+          : (root.headerHeight + formColumn.implicitHeight))))
   readonly property int cardHeight: Math.min(panel.height - Style.gapsOut * 2, contentH + pad * 2)
   readonly property string headerTitle: {
+    if (root.view === "iconPicker")
+      return "Pick an icon"
     if (root.view === "reorderMove")
       return "Move \u201c" + (root.moveSourceLabel || "item") + "\u201d to\u2026"
     if (root.view === "reorder") {
@@ -728,7 +838,7 @@ Panel {
         id: keyCatcher
         anchors.fill: parent
         focus: true
-        blocked: root.confirmOpen || root.editingText || ctxProfileDropdown.popupOpen || root.view === "reorder" || root.view === "reorderMove"
+        blocked: root.confirmOpen || root.editingText || ctxProfileDropdown.popupOpen || root.view === "reorder" || root.view === "reorderMove" || root.view === "iconPicker"
         onMoveRequested: function(dx, dy) { if (dx < 0) root.goBack() }
         onCloseRequested: root.goBack()
         onTabRequested: function(d) { root.switchPanel(d) }
@@ -800,12 +910,21 @@ Panel {
               }
 
               PanelSectionHeader { text: "Icon (nerd font glyph)" }
-              TextField {
-                id: ctxIconField
+              RowLayout {
                 width: parent.width
-                placeholderText: "\uf1d4"
-                onAccepted: ctxProfileDropdown.forceActiveFocus()
-                Keys.onEscapePressed: root.cancelEdit()
+                spacing: Style.space(8)
+                TextField {
+                  id: ctxIconField
+                  Layout.fillWidth: true
+                  placeholderText: "\uf1d4"
+                  onAccepted: ctxProfileDropdown.forceActiveFocus()
+                  Keys.onEscapePressed: root.cancelEdit()
+                }
+                Button {
+                  Layout.alignment: Qt.AlignVCenter
+                  text: "\uf002"
+                  onClicked: root.openIconPicker("ctx", "editContext")
+                }
               }
 
               PanelSectionHeader { text: "Chrome profile (URLs + Browser)" }
@@ -924,15 +1043,24 @@ Panel {
               }
 
               PanelSectionHeader { text: "Icon (nerd font glyph)" }
-              TextField {
-                id: itemIconField
+              RowLayout {
                 width: parent.width
-                placeholderText: "\uf1d4"
-                onAccepted: {
-                  if (root.itemType === "submenu") root.applyItemSave()
-                  else if (root.firstTypeField()) root.firstTypeField().forceActiveFocus()
+                spacing: Style.space(8)
+                TextField {
+                  id: itemIconField
+                  Layout.fillWidth: true
+                  placeholderText: "\uf1d4"
+                  onAccepted: {
+                    if (root.itemType === "submenu") root.applyItemSave()
+                    else if (root.firstTypeField()) root.firstTypeField().forceActiveFocus()
+                  }
+                  Keys.onEscapePressed: root.cancelEdit()
                 }
-                Keys.onEscapePressed: root.cancelEdit()
+                Button {
+                  Layout.alignment: Qt.AlignVCenter
+                  text: "\uf002"
+                  onClicked: root.openIconPicker("item", "editItem")
+                }
               }
 
               PanelSectionHeader { visible: root.itemType === "web"; text: "URL" }
@@ -1273,6 +1401,117 @@ Panel {
         }
       }
       }
+
+        // Icon picker: search the nerd-font cheat-sheet glyph map.
+        Column {
+          id: iconPickerColumn
+          visible: root.view === "iconPicker"
+          width: parent.width
+          spacing: Style.spacing.xs
+
+          TextField {
+            id: iconSearchField
+            width: parent.width
+            placeholderText: "Search icons\u2026"
+            onTextChanged: { root.iconPickerQuery = text; root.applyIconFilter() }
+            onAccepted: root.pickIcon()
+            Keys.onEscapePressed: root.cancelIconPicker()
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Up) { root.selectIcon(-1); event.accepted = true }
+              else if (event.key === Qt.Key_Down) { root.selectIcon(1); event.accepted = true }
+            }
+          }
+
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(8)
+            Text {
+              Layout.fillWidth: true
+              text: root.iconPickerLoading ? "Fetching icons\u2026"
+                : (root.iconPickerError ? root.iconPickerError
+                : root.iconPickerItems.length + " of " + root.iconDb.length + " icons")
+              color: root.dim
+              font.family: root.fam
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+            Button {
+              visible: !!root.iconPickerError
+              text: "Retry"
+              onClicked: root.ensureIconDb(true)
+            }
+          }
+
+          ListView {
+            id: iconList
+            width: parent.width
+            height: root.iconPickerListHeight
+            clip: true
+            model: root.iconPickerItems
+            spacing: Style.spacing.xs
+            boundsBehavior: Flickable.StopAtBounds
+
+            delegate: BorderSurface {
+              required property int index
+              required property var modelData
+
+              readonly property bool hasCursor: root.view === "iconPicker" && root.iconPickerSelected === index
+
+              width: ListView.view.width
+              height: root.reorderRowHeight
+              radius: Style.cornerRadius
+              color: hasCursor ? root.selectedBg : "transparent"
+              borderSpec: hasCursor ? Border.flat(root.acc, Math.max(1, Style.normalBorderWidth)) : Border.none()
+
+              MouseArea {
+                anchors.fill: parent
+                onClicked: { root.iconPickerSelected = index; root.pickIcon() }
+              }
+
+              RowLayout {
+                anchors.fill: parent
+                spacing: Style.space(8)
+
+                Text {
+                  Layout.preferredWidth: Style.space(28)
+                  Layout.alignment: Qt.AlignVCenter
+                  text: root.iconGlyph(modelData)
+                  color: root.fg
+                  font.family: root.fam
+                  font.pixelSize: Style.font.body
+                  horizontalAlignment: Text.AlignHCenter
+                }
+
+                Text {
+                  Layout.fillWidth: true
+                  Layout.alignment: Qt.AlignVCenter
+                  text: modelData.set + " " + modelData.name
+                  color: root.fg
+                  font.family: root.fam
+                  font.pixelSize: Style.font.body
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  Layout.alignment: Qt.AlignVCenter
+                  text: modelData.hex
+                  color: root.dim
+                  font.family: root.fam
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: "Type to filter \u00b7 \u2191/\u2193 choose \u00b7 Enter pick \u00b7 Esc back"
+            color: root.dim
+            font.family: root.fam
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+        }
 
       ConfirmDialog {
         id: confirmDialog
