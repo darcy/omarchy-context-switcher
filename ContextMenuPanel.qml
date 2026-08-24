@@ -64,15 +64,10 @@ Panel {
   // Whether Shift is held while the move/edit list has keyboard focus — the
   // highlighted row then shows a move icon instead of the edit pencil.
   property bool shiftHeld: false
-  // Icon picker (search of the nerd-font cheat-sheet glyph map).
-  property string iconPickerTarget: ""
-  property string iconPickerReturn: "editContext"
-  property string iconPickerQuery: ""
-  property int iconPickerSelected: 0
+  // Icon picker data (nerd-font cheat-sheet glyph map), fed to the
+  // SearchableDropdown pickers on the icon fields.
   property var iconDb: []
-  property var iconPickerItems: []
-  property bool iconPickerLoading: false
-  property string iconPickerError: ""
+  property var iconOptions: []
   property int moveSelected: 0
   property var moveTargets: []
   property bool moveNewMode: false
@@ -88,10 +83,15 @@ Panel {
   readonly property color acc: bar ? bar.urgent : Color.urgent
   readonly property string fam: bar ? bar.fontFamily : Style.font.family
 
-  readonly property bool editingText: ctxNameField.activeFocus || ctxShortcutField.activeFocus ||
+  // Any editable control in the editor has focus: key routing is handed to
+  // the native Qt focus chain (Tab walk, Enter on buttons, chip arrows) and
+  // the key catcher is suspended so it cannot steal those keys.
+  readonly property bool formControlFocus: ctxNameField.activeFocus || ctxShortcutField.activeFocus ||
     ctxIconField.activeFocus || itemTitleField.activeFocus || itemIconField.activeFocus ||
     itemUrlField.activeFocus || itemHostField.activeFocus || itemCommandField.activeFocus || itemWorkdirField.activeFocus ||
-    iconSearchField.activeFocus
+    typeGroup.activeFocus || subTypeGroup.activeFocus ||
+    deleteItemBtn.activeFocus || cancelItemBtn.activeFocus || saveItemBtn.activeFocus ||
+    ctxIconPicker.activeFocus || itemIconPicker.activeFocus
 
   function contextById(id) {
     return Model.contextById(config, id)
@@ -137,6 +137,7 @@ Panel {
   }
 
   function open() {
+    root.ensureIconDb(false)
     if (root.requestMode === "editContextNew") root.startAddContext()
     else if (root.requestMode === "editContext") root.startEditContext(root.requestContext)
     else if (root.requestMode === "editItem") {
@@ -200,7 +201,6 @@ Panel {
 
   function goBack() {
     if (root.confirmOpen) { root.confirmOpen = false; return }
-    if (root.view === "iconPicker") { root.cancelIconPicker(); return }
     if (root.view === "reorderMove") { root.cancelMoveToSubmenu(); return }
     if (root.view === "reorder") { root.commitReorder(); return }
     if (root.view === "manage") { root.startEditItem(root.contextId, root.managePath); return }
@@ -219,49 +219,6 @@ Panel {
   // type-specific fields → the item picker button → Delete/Cancel/Save.
   // Fields handle Tab themselves (the key catcher is blocked while typing);
   // everything else routes through the catcher's tabRequested.
-
-  function itemFocusControls() {
-    var out = []
-    for (var i = 0; i < typeRepeater.count; i++) {
-      var b = typeRepeater.itemAt(i)
-      if (b && b.visible) out.push(b)
-    }
-    if (root.itemType === "remote") out.push(moshBtn, sshBtn)
-    out.push(itemTitleField, itemIconField, iconPickItemBtn)
-    if (root.itemType === "web") out.push(itemUrlField)
-    else if (root.itemType === "remote") out.push(itemHostField, itemCommandField, itemWorkdirField)
-    else if (root.itemType === "terminal" || root.itemType === "script") out.push(itemCommandField)
-    if (!root.itemAddMode) out.push(deleteItemBtn)
-    out.push(cancelItemBtn, saveItemBtn)
-    return out
-  }
-
-  function advanceFormFocus(direction) {
-    if (root.view !== "editItem") return
-    var list = root.itemFocusControls()
-    if (list.length === 0) return
-    var cur = -1
-    for (var i = 0; i < list.length; i++) if (list[i].activeFocus) { cur = i; break }
-    var step = direction < 0 ? -1 : 1
-    var next = (cur + step + list.length) % list.length
-    list[next].forceActiveFocus()
-  }
-
-  // Enter/Space while a form button has focus (the key catcher consumes
-  // Return/Space, so route the action explicitly).
-  function formActivateFocused() {
-    if (root.view !== "editItem") return
-    if (saveItemBtn.activeFocus) { root.applyItemSave(); return }
-    if (cancelItemBtn.activeFocus) { root.cancelEdit(); return }
-    if (deleteItemBtn.activeFocus) { root.requestDeleteItem(); return }
-    if (iconPickItemBtn.activeFocus) { root.openIconPicker("item", "editItem"); return }
-    for (var i = 0; i < typeRepeater.count; i++) {
-      var b = typeRepeater.itemAt(i)
-      if (b && b.activeFocus) { root.itemType = b.itemValue; return }
-    }
-    if (moshBtn.activeFocus) { root.itemRemoteKind = "mosh"; return }
-    if (sshBtn.activeFocus) { root.itemRemoteKind = "ssh"; return }
-  }
 
   function startAddContext() {
     root.editingAdd = true; root.contextId = ""
@@ -438,77 +395,38 @@ Panel {
   function iconGlyph(e) {
     return String.fromCodePoint(parseInt("0x" + e.hex, 16))
   }
-
-  function openIconPicker(target, returnView) {
-    root.iconPickerTarget = target
-    root.iconPickerReturn = returnView
-    root.iconPickerQuery = ""
-    root.iconPickerSelected = 0
-    root.view = "iconPicker"
-    root.ensureIconDb(false)
-    Qt.callLater(function() { root.focusField(iconSearchField) })
+  function iconGlyphHex(hex) {
+    return String.fromCodePoint(parseInt("0x" + String(hex || ""), 16))
   }
 
   function ensureIconDb(refresh) {
-    if (!refresh && root.iconDb.length > 0) { root.applyIconFilter(); return }
-    root.iconPickerLoading = true
-    root.iconPickerError = ""
-    iconProc.command = ["bash", "-lc", "omarchy-context-icons" + (refresh ? " --refresh" : "") + " 2>/dev/null"]
-    iconProc.running = true
+    if (refresh || root.iconDb.length === 0) {
+      iconProc.command = ["bash", "-lc", "omarchy-context-icons" + (refresh ? " --refresh" : "") + " 2>/dev/null"]
+      iconProc.running = true
+    }
   }
 
   function applyIconCache(raw) {
-    root.iconPickerLoading = false
     var text = String(raw || "").trim()
-    if (!text || text.indexOf("/") !== 0) {
-      root.iconPickerError = text || "Icon fetch failed (offline?)"
-      return
-    }
+    if (!text || text.indexOf("/") !== 0) return
     iconReadProc.command = ["bash", "-lc", "cat " + Util.shellQuote(text) + " 2>/dev/null || true"]
     iconReadProc.running = true
   }
 
   function applyIconDb(raw) {
     try { root.iconDb = JSON.parse(String(raw || "[]")) } catch (e) { root.iconDb = [] }
-    root.iconPickerError = root.iconDb.length ? "" : "Icon list is empty."
-    root.applyIconFilter()
+    root.buildIconOptions()
   }
 
-  function applyIconFilter() {
-    var q = root.iconPickerQuery.trim().toLowerCase()
-    var out = []
-    for (var i = 0; i < root.iconDb.length && out.length < 300; i++) {
+  // SearchableDropdown options: the glyph itself in the label (same nerd
+  // font the rows render in), value = codepoint hex.
+  function buildIconOptions() {
+    var opts = []
+    for (var i = 0; i < root.iconDb.length; i++) {
       var e = root.iconDb[i]
-      if (!q || e.name.toLowerCase().indexOf(q) >= 0 || e.set.indexOf(q) >= 0) out.push(e)
+      opts.push({ value: e.hex, label: root.iconGlyph(e) + "  " + e.set + " " + e.name, description: e.name })
     }
-    root.iconPickerItems = out
-    root.iconPickerSelected = Math.min(root.iconPickerSelected, Math.max(0, out.length - 1))
-  }
-
-  function selectIcon(dy) {
-    var n = root.iconPickerItems.length
-    if (n <= 0) return
-    root.iconPickerSelected = (root.iconPickerSelected + dy + n) % n
-    iconList.positionViewAtIndex(root.iconPickerSelected, ListView.Contain)
-  }
-
-  function pickIcon() {
-    var e = root.iconPickerItems[root.iconPickerSelected]
-    if (!e) return
-    var g = root.iconGlyph(e)
-    if (root.iconPickerTarget === "ctx") ctxIconField.text = g
-    else if (root.iconPickerTarget === "item") itemIconField.text = g
-    root.cancelIconPicker()
-  }
-
-  function cancelIconPicker() {
-    var target = root.iconPickerTarget
-    root.view = root.iconPickerReturn
-    root.iconPickerItems = []
-    Qt.callLater(function() {
-      if (target === "ctx") root.focusField(ctxIconField)
-      else if (target === "item") root.focusField(itemIconField)
-    })
+    root.iconOptions = opts
   }
 
   // After saving/cancelling/deleting an item opened from the move/edit list,
@@ -802,20 +720,15 @@ Panel {
   readonly property int reorderMoveListHeight: Math.min(root.moveTargets.length * (root.reorderRowHeight + Style.spacing.xs), root.reorderMaxHeight)
   readonly property int reorderMoveExtra: root.moveNewMode ? (Style.space(64)) : 0
   readonly property int reorderMoveColumnHeight: root.reorderMoveListHeight + root.reorderMoveExtra
-  readonly property int iconPickerListHeight: Math.min(root.iconPickerItems.length * (root.reorderRowHeight + Style.spacing.xs), root.reorderMaxHeight)
   readonly property int contentH: root.view === "reorder"
     ? (root.headerHeight + reorderColumn.implicitHeight)
     : (root.view === "reorderMove"
       ? (root.headerHeight + root.reorderMoveColumnHeight)
-      : (root.view === "iconPicker"
-        ? (root.headerHeight + iconPickerColumn.implicitHeight)
-        : (root.view === "manage"
-          ? (root.headerHeight + manageColumn.implicitHeight)
-          : (root.headerHeight + formColumn.implicitHeight))))
+      : (root.view === "manage"
+        ? (root.headerHeight + manageColumn.implicitHeight)
+        : (root.headerHeight + formColumn.implicitHeight)))
   readonly property int cardHeight: Math.min(panel.height - Style.gapsOut * 2, contentH + pad * 2)
   readonly property string headerTitle: {
-    if (root.view === "iconPicker")
-      return "Pick an icon"
     if (root.view === "reorderMove")
       return "Move \u201c" + (root.moveSourceLabel || "item") + "\u201d to\u2026"
     if (root.view === "reorder") {
@@ -887,15 +800,12 @@ Panel {
         id: keyCatcher
         anchors.fill: parent
         focus: true
-        blocked: root.confirmOpen || root.editingText || ctxProfileDropdown.popupOpen || root.view === "reorder" || root.view === "reorderMove" || root.view === "iconPicker"
+        blocked: root.confirmOpen || root.formControlFocus || ctxProfileDropdown.popupOpen ||
+          ctxIconPicker.popupOpen || itemIconPicker.popupOpen ||
+          root.view === "reorder" || root.view === "reorderMove"
         onMoveRequested: function(dx, dy) { if (dx < 0) root.goBack() }
         onCloseRequested: root.goBack()
-        onTabRequested: function(d) {
-          if (root.view === "editItem") { root.advanceFormFocus(d); return }
-          root.switchPanel(d)
-        }
-        onReturnRequested: root.formActivateFocused()
-        onActivateRequested: root.formActivateFocused()
+        onTabRequested: function(d) { root.switchPanel(d) }
 
         Column {
           anchors.fill: parent
@@ -974,10 +884,13 @@ Panel {
                   onAccepted: ctxProfileDropdown.forceActiveFocus()
                   Keys.onEscapePressed: root.cancelEdit()
                 }
-                Button {
-                  Layout.alignment: Qt.AlignVCenter
-                  text: "\uf002"
-                  onClicked: root.openIconPicker("ctx", "editContext")
+                SearchableDropdown {
+                  id: ctxIconPicker
+                  Layout.preferredWidth: Style.space(150)
+                  showLabel: false
+                  placeholderText: "Pick an icon\u2026"
+                  options: root.iconOptions
+                  onChanged: function(v) { ctxIconField.text = root.iconGlyphHex(v) }
                 }
               }
 
@@ -1022,58 +935,29 @@ Panel {
               spacing: Style.spacing.xs
 
               PanelSectionHeader { visible: !root.itemTypeLocked; text: "Type" }
-              RowLayout {
+              ButtonGroup {
+                id: typeGroup
                 visible: !root.itemTypeLocked
                 width: parent.width
-                spacing: Style.spacing.xs
-                Repeater {
-                  id: typeRepeater
-                  model: [
-                    { value: "web", label: "Web" },
-                    { value: "remote", label: "Remote" },
-                    { value: "terminal", label: "Terminal" },
-                    { value: "script", label: "Script" },
-                    { value: "submenu", label: "Submenu" }
-                  ]
-                  delegate: Button {
-                    required property var modelData
-                    property var itemValue: modelData.value
-                    text: modelData.label
-                    Layout.fillWidth: true
-                    selected: root.itemType === modelData.value
-                    accent: Color.accent
-                    onClicked: root.itemType = modelData.value
-                  }
-                }
+                options: [
+                  { value: "web", label: "Web" },
+                  { value: "remote", label: "Remote" },
+                  { value: "terminal", label: "Terminal" },
+                  { value: "script", label: "Script" },
+                  { value: "submenu", label: "Submenu" }
+                ]
+                value: root.itemType
+                onChanged: function(v) { root.itemType = v }
               }
 
               // Remote covers both mosh and ssh (kept distinct in the JSON).
-              RowLayout {
+              ButtonGroup {
+                id: subTypeGroup
                 visible: root.itemType === "remote"
                 width: parent.width
-                spacing: Style.space(8)
-                Text {
-                  text: "Connect via"
-                  color: root.dim
-                  font.family: root.fam
-                  font.pixelSize: Style.font.caption
-                  Layout.alignment: Qt.AlignVCenter
-                }
-                Button {
-                  id: moshBtn
-                  text: "Mosh"
-                  selected: root.itemRemoteKind === "mosh"
-                  accent: Color.accent
-                  onClicked: root.itemRemoteKind = "mosh"
-                }
-                Button {
-                  id: sshBtn
-                  text: "SSH"
-                  selected: root.itemRemoteKind === "ssh"
-                  accent: Color.accent
-                  onClicked: root.itemRemoteKind = "ssh"
-                }
-                Item { Layout.fillWidth: true }
+                options: [{ value: "mosh", label: "Mosh" }, { value: "ssh", label: "SSH" }]
+                value: root.itemRemoteKind
+                onChanged: function(v) { root.itemRemoteKind = v }
               }
 
               // What the selected type does (Terminal vs Script differs in
@@ -1098,10 +982,6 @@ Panel {
                 placeholderText: "Item title"
                 onAccepted: root.firstTypeField().forceActiveFocus()
                 Keys.onEscapePressed: root.cancelEdit()
-                Keys.onTabPressed: root.advanceFormFocus(1)
-                Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
-                }
               }
 
               PanelSectionHeader { text: "Icon (nerd font glyph)" }
@@ -1117,16 +997,14 @@ Panel {
                     else if (root.firstTypeField()) root.firstTypeField().forceActiveFocus()
                   }
                   Keys.onEscapePressed: root.cancelEdit()
-                  Keys.onTabPressed: root.advanceFormFocus(1)
-                  Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
                 }
-                }
-                Button {
-                  id: iconPickItemBtn
-                  Layout.alignment: Qt.AlignVCenter
-                  text: "\uf002"
-                  onClicked: root.openIconPicker("item", "editItem")
+                SearchableDropdown {
+                  id: itemIconPicker
+                  Layout.preferredWidth: Style.space(150)
+                  showLabel: false
+                  placeholderText: "Pick an icon\u2026"
+                  options: root.iconOptions
+                  onChanged: function(v) { itemIconField.text = root.iconGlyphHex(v) }
                 }
               }
 
@@ -1138,10 +1016,6 @@ Panel {
                 placeholderText: "https://…"
                 onAccepted: root.applyItemSave()
                 Keys.onEscapePressed: root.cancelEdit()
-                Keys.onTabPressed: root.advanceFormFocus(1)
-                Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
-                }
               }
 
               PanelSectionHeader { visible: root.itemType === "remote"; text: "Host" }
@@ -1152,10 +1026,6 @@ Panel {
                 placeholderText: "user@host"
                 onAccepted: itemCommandField.forceActiveFocus()
                 Keys.onEscapePressed: root.cancelEdit()
-                Keys.onTabPressed: root.advanceFormFocus(1)
-                Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
-                }
               }
 
               PanelSectionHeader { visible: root.itemType === "remote" || root.itemType === "terminal" || root.itemType === "script"; text: "Command" }
@@ -1168,10 +1038,6 @@ Panel {
                   : "command run directly (no window)"
                 onAccepted: (root.itemType === "remote") ? itemWorkdirField.forceActiveFocus() : root.applyItemSave()
                 Keys.onEscapePressed: root.cancelEdit()
-                Keys.onTabPressed: root.advanceFormFocus(1)
-                Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
-                }
               }
 
               PanelSectionHeader { visible: root.itemType === "remote"; text: "Workdir (optional)" }
@@ -1182,10 +1048,6 @@ Panel {
                 placeholderText: "~/work"
                 onAccepted: root.applyItemSave()
                 Keys.onEscapePressed: root.cancelEdit()
-                Keys.onTabPressed: root.advanceFormFocus(1)
-                Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
-                }
               }
 
               // Existing submenus get a manage entry (children live at the
@@ -1212,18 +1074,24 @@ Panel {
                   visible: !root.itemAddMode
                   foreground: Color.urgent
                   bordered: true
+                  focusable: true
+                  Keys.onEscapePressed: root.cancelEdit()
                   onClicked: root.requestDeleteItem()
                 }
                 Item { Layout.fillWidth: true }
                 Button {
                   id: cancelItemBtn
                   text: "Cancel"
+                  focusable: true
+                  Keys.onEscapePressed: root.cancelEdit()
                   onClicked: root.cancelEdit()
                 }
                 Button {
                   id: saveItemBtn
                   text: "Save"
                   accent: Color.accent
+                  focusable: true
+                  Keys.onEscapePressed: root.cancelEdit()
                   onClicked: root.applyItemSave()
                 }
               }
@@ -1487,117 +1355,6 @@ Panel {
         }
       }
       }
-
-        // Icon picker: search the nerd-font cheat-sheet glyph map.
-        Column {
-          id: iconPickerColumn
-          visible: root.view === "iconPicker"
-          width: parent.width
-          spacing: Style.spacing.xs
-
-          TextField {
-            id: iconSearchField
-            width: parent.width
-            placeholderText: "Search icons\u2026"
-            onTextChanged: { root.iconPickerQuery = text; root.applyIconFilter() }
-            onAccepted: root.pickIcon()
-            Keys.onEscapePressed: root.cancelIconPicker()
-            Keys.onPressed: function(event) {
-              if (event.key === Qt.Key_Up) { root.selectIcon(-1); event.accepted = true }
-              else if (event.key === Qt.Key_Down) { root.selectIcon(1); event.accepted = true }
-            }
-          }
-
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-            Text {
-              Layout.fillWidth: true
-              text: root.iconPickerLoading ? "Fetching icons\u2026"
-                : (root.iconPickerError ? root.iconPickerError
-                : root.iconPickerItems.length + " of " + root.iconDb.length + " icons")
-              color: root.dim
-              font.family: root.fam
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-            }
-            Button {
-              visible: !!root.iconPickerError
-              text: "Retry"
-              onClicked: root.ensureIconDb(true)
-            }
-          }
-
-          ListView {
-            id: iconList
-            width: parent.width
-            height: root.iconPickerListHeight
-            clip: true
-            model: root.iconPickerItems
-            spacing: Style.spacing.xs
-            boundsBehavior: Flickable.StopAtBounds
-
-            delegate: BorderSurface {
-              required property int index
-              required property var modelData
-
-              readonly property bool hasCursor: root.view === "iconPicker" && root.iconPickerSelected === index
-
-              width: ListView.view.width
-              height: root.reorderRowHeight
-              radius: Style.cornerRadius
-              color: hasCursor ? root.selectedBg : "transparent"
-              borderSpec: hasCursor ? Border.flat(root.acc, Math.max(1, Style.normalBorderWidth)) : Border.none()
-
-              MouseArea {
-                anchors.fill: parent
-                onClicked: { root.iconPickerSelected = index; root.pickIcon() }
-              }
-
-              RowLayout {
-                anchors.fill: parent
-                spacing: Style.space(8)
-
-                Text {
-                  Layout.preferredWidth: Style.space(28)
-                  Layout.alignment: Qt.AlignVCenter
-                  text: root.iconGlyph(modelData)
-                  color: root.fg
-                  font.family: root.fam
-                  font.pixelSize: Style.font.body
-                  horizontalAlignment: Text.AlignHCenter
-                }
-
-                Text {
-                  Layout.fillWidth: true
-                  Layout.alignment: Qt.AlignVCenter
-                  text: modelData.set + " " + modelData.name
-                  color: root.fg
-                  font.family: root.fam
-                  font.pixelSize: Style.font.body
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  Layout.alignment: Qt.AlignVCenter
-                  text: modelData.hex
-                  color: root.dim
-                  font.family: root.fam
-                  font.pixelSize: Style.font.caption
-                }
-              }
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: "Type to filter \u00b7 \u2191/\u2193 choose \u00b7 Enter pick \u00b7 Esc back"
-            color: root.dim
-            font.family: root.fam
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-        }
 
       ConfirmDialog {
         id: confirmDialog
