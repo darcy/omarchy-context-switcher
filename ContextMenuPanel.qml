@@ -409,19 +409,20 @@ Panel {
   }
 
   // Activate the highlighted row: rows 0/1 are the list's action entries
-  // (Edit details / Add item); the rest open the item's edit form — folders
-  // open the context-style folder form instead.
+  // (Edit details / Add item); items open their edit form; folders enter
+  // their own management screen (Edit details / Add item / children list).
   function editReorderSelection() {
     if (root.reorderSelected === 0) { root.editDetailsFromReorder(); return }
     if (root.reorderSelected === 1) { root.addItemFromReorder(); return }
     var itemSel = root.reorderSelected - root.reorderDisplayOffset
     if (itemSel < 0 || itemSel >= root.reorderOrder.length) return
     var path = root.reorderPath ? root.reorderPath + "." + itemSel : String(itemSel)
-    root.editingFromReorder = true
     if (root.reorderOrder[itemSel] && root.reorderOrder[itemSel].type === "submenu") {
-      root.startEditSubmenu(root.contextId, path)
+      root.editingFromReorder = false
+      root.startReorder(root.contextId, path)
       return
     }
+    root.editingFromReorder = true
     root.startEditItem(root.contextId, path)
   }
 
