@@ -214,6 +214,55 @@ Panel {
 
   function cancelEdit() { root.goBack() }
 
+  // ---- Item-form keyboard tab order ----
+  // Tab/Shift+Tab walk: type chips → remote kind chips → Title → Icon →
+  // type-specific fields → the item picker button → Delete/Cancel/Save.
+  // Fields handle Tab themselves (the key catcher is blocked while typing);
+  // everything else routes through the catcher's tabRequested.
+
+  function itemFocusControls() {
+    var out = []
+    for (var i = 0; i < typeRepeater.count; i++) {
+      var b = typeRepeater.itemAt(i)
+      if (b && b.visible) out.push(b)
+    }
+    if (root.itemType === "remote") out.push(moshBtn, sshBtn)
+    out.push(itemTitleField, itemIconField, iconPickItemBtn)
+    if (root.itemType === "web") out.push(itemUrlField)
+    else if (root.itemType === "remote") out.push(itemHostField, itemCommandField, itemWorkdirField)
+    else if (root.itemType === "terminal" || root.itemType === "script") out.push(itemCommandField)
+    if (!root.itemAddMode) out.push(deleteItemBtn)
+    out.push(cancelItemBtn, saveItemBtn)
+    return out
+  }
+
+  function advanceFormFocus(direction) {
+    if (root.view !== "editItem") return
+    var list = root.itemFocusControls()
+    if (list.length === 0) return
+    var cur = -1
+    for (var i = 0; i < list.length; i++) if (list[i].activeFocus) { cur = i; break }
+    var step = direction < 0 ? -1 : 1
+    var next = (cur + step + list.length) % list.length
+    list[next].forceActiveFocus()
+  }
+
+  // Enter/Space while a form button has focus (the key catcher consumes
+  // Return/Space, so route the action explicitly).
+  function formActivateFocused() {
+    if (root.view !== "editItem") return
+    if (saveItemBtn.activeFocus) { root.applyItemSave(); return }
+    if (cancelItemBtn.activeFocus) { root.cancelEdit(); return }
+    if (deleteItemBtn.activeFocus) { root.requestDeleteItem(); return }
+    if (iconPickItemBtn.activeFocus) { root.openIconPicker("item", "editItem"); return }
+    for (var i = 0; i < typeRepeater.count; i++) {
+      var b = typeRepeater.itemAt(i)
+      if (b && b.activeFocus) { root.itemType = b.itemValue; return }
+    }
+    if (moshBtn.activeFocus) { root.itemRemoteKind = "mosh"; return }
+    if (sshBtn.activeFocus) { root.itemRemoteKind = "ssh"; return }
+  }
+
   function startAddContext() {
     root.editingAdd = true; root.contextId = ""
     ctxNameField.text = ""; ctxShortcutField.text = ""; ctxIconField.text = ""
@@ -841,7 +890,12 @@ Panel {
         blocked: root.confirmOpen || root.editingText || ctxProfileDropdown.popupOpen || root.view === "reorder" || root.view === "reorderMove" || root.view === "iconPicker"
         onMoveRequested: function(dx, dy) { if (dx < 0) root.goBack() }
         onCloseRequested: root.goBack()
-        onTabRequested: function(d) { root.switchPanel(d) }
+        onTabRequested: function(d) {
+          if (root.view === "editItem") { root.advanceFormFocus(d); return }
+          root.switchPanel(d)
+        }
+        onReturnRequested: root.formActivateFocused()
+        onActivateRequested: root.formActivateFocused()
 
         Column {
           anchors.fill: parent
@@ -973,6 +1027,7 @@ Panel {
                 width: parent.width
                 spacing: Style.spacing.xs
                 Repeater {
+                  id: typeRepeater
                   model: [
                     { value: "web", label: "Web" },
                     { value: "remote", label: "Remote" },
@@ -982,6 +1037,7 @@ Panel {
                   ]
                   delegate: Button {
                     required property var modelData
+                    property var itemValue: modelData.value
                     text: modelData.label
                     Layout.fillWidth: true
                     selected: root.itemType === modelData.value
@@ -1004,12 +1060,14 @@ Panel {
                   Layout.alignment: Qt.AlignVCenter
                 }
                 Button {
+                  id: moshBtn
                   text: "Mosh"
                   selected: root.itemRemoteKind === "mosh"
                   accent: Color.accent
                   onClicked: root.itemRemoteKind = "mosh"
                 }
                 Button {
+                  id: sshBtn
                   text: "SSH"
                   selected: root.itemRemoteKind === "ssh"
                   accent: Color.accent
@@ -1040,6 +1098,10 @@ Panel {
                 placeholderText: "Item title"
                 onAccepted: root.firstTypeField().forceActiveFocus()
                 Keys.onEscapePressed: root.cancelEdit()
+                Keys.onTabPressed: root.advanceFormFocus(1)
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
+                }
               }
 
               PanelSectionHeader { text: "Icon (nerd font glyph)" }
@@ -1055,8 +1117,13 @@ Panel {
                     else if (root.firstTypeField()) root.firstTypeField().forceActiveFocus()
                   }
                   Keys.onEscapePressed: root.cancelEdit()
+                  Keys.onTabPressed: root.advanceFormFocus(1)
+                  Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
+                }
                 }
                 Button {
+                  id: iconPickItemBtn
                   Layout.alignment: Qt.AlignVCenter
                   text: "\uf002"
                   onClicked: root.openIconPicker("item", "editItem")
@@ -1071,6 +1138,10 @@ Panel {
                 placeholderText: "https://…"
                 onAccepted: root.applyItemSave()
                 Keys.onEscapePressed: root.cancelEdit()
+                Keys.onTabPressed: root.advanceFormFocus(1)
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
+                }
               }
 
               PanelSectionHeader { visible: root.itemType === "remote"; text: "Host" }
@@ -1081,6 +1152,10 @@ Panel {
                 placeholderText: "user@host"
                 onAccepted: itemCommandField.forceActiveFocus()
                 Keys.onEscapePressed: root.cancelEdit()
+                Keys.onTabPressed: root.advanceFormFocus(1)
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
+                }
               }
 
               PanelSectionHeader { visible: root.itemType === "remote" || root.itemType === "terminal" || root.itemType === "script"; text: "Command" }
@@ -1093,6 +1168,10 @@ Panel {
                   : "command run directly (no window)"
                 onAccepted: (root.itemType === "remote") ? itemWorkdirField.forceActiveFocus() : root.applyItemSave()
                 Keys.onEscapePressed: root.cancelEdit()
+                Keys.onTabPressed: root.advanceFormFocus(1)
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
+                }
               }
 
               PanelSectionHeader { visible: root.itemType === "remote"; text: "Workdir (optional)" }
@@ -1103,6 +1182,10 @@ Panel {
                 placeholderText: "~/work"
                 onAccepted: root.applyItemSave()
                 Keys.onEscapePressed: root.cancelEdit()
+                Keys.onTabPressed: root.advanceFormFocus(1)
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Backtab) { root.advanceFormFocus(-1); event.accepted = true }
+                }
               }
 
               // Existing submenus get a manage entry (children live at the
@@ -1124,6 +1207,7 @@ Panel {
                 spacing: Style.space(8)
 
                 Button {
+                  id: deleteItemBtn
                   text: "Delete"
                   visible: !root.itemAddMode
                   foreground: Color.urgent
@@ -1132,10 +1216,12 @@ Panel {
                 }
                 Item { Layout.fillWidth: true }
                 Button {
+                  id: cancelItemBtn
                   text: "Cancel"
                   onClicked: root.cancelEdit()
                 }
                 Button {
+                  id: saveItemBtn
                   text: "Save"
                   accent: Color.accent
                   onClicked: root.applyItemSave()
