@@ -13,3 +13,17 @@ if [[ "$local_has_ctx" -ge 1 && "$local_has_ws" -eq 0 ]]; then
 fi
 jq '(.bar.layout.left) = ([.bar.layout.left[]? | select(.id != "omarchy.workspaces" and .id != "context-switcher")] + [{"id": "context-switcher"}])' \
   "$SHELL_JSON" > "$SHELL_JSON.tmp" && mv "$SHELL_JSON.tmp" "$SHELL_JSON"
+
+# Self-heal the Hyprland bindings include: a (previously possible) teardown
+# false-positive or an omarchy rewrite of bindings.lua can drop the
+# context-bindings source line, silently killing SUPER+ALT menus/slots even
+# though the plugin is enabled. Re-append whenever this service comes up.
+BINDINGS_LUA="$HOME/.config/hypr/bindings.lua"
+if [[ -f "$BINDINGS_LUA" ]] && ! grep -q 'context-bindings.lua' "$BINDINGS_LUA"; then
+  cat >> "$BINDINGS_LUA" <<'LUA'
+
+-- Context Switcher generated bindings (menus, slots, cycle).
+dofile(os.getenv("HOME") .. "/.config/hypr/context-bindings.lua")
+LUA
+  hyprctl reload >/dev/null 2>&1 || true
+fi

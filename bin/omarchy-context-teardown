@@ -14,12 +14,15 @@ set -euo pipefail
 export PATH="$HOME/.local/share/omarchy/bin:$PATH"
 SHELL_JSON="$HOME/.config/omarchy/shell.json"
 
-# Self-guard: only proceed when the plugin is actually disabled, which a
-# bar-widget disable signals by removing the entry from bar.layout.left. On a
-# restart/reload the entry is still present, so we exit and do nothing.
-if [[ -f "$SHELL_JSON" ]] && jq -e '[.bar.layout.left[]? | select(.id == "context-switcher")] | length > 0' "$SHELL_JSON" >/dev/null 2>&1; then
+# Self-guard: only proceed when the plugin is actually disabled. The plugin
+# registry's enabled flag is authoritative — the bar layout can be transient
+# (mid-rewrite / layout regen), and a false pass here previously removed the
+# context-bindings include + menu extension while the plugin was still live.
+if omarchy plugin list --json 2>/dev/null | jq -e 'any(.[]; .id == "context-switcher" and .enabled == true)' >/dev/null 2>&1; then
   exit 0
 fi
+# If the registry is unreachable, do nothing rather than risk a false disable.
+omarchy plugin list --json >/dev/null 2>&1 || exit 0
 BINDINGS_LUA="$HOME/.config/hypr/bindings.lua"
 CTX_BINDINGS="$HOME/.config/hypr/context-bindings.lua"
 MENU_EXT="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
