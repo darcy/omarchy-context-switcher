@@ -66,6 +66,10 @@ Item {
       root.config = parsed
       root.configLoaded = true
       root.lastError = ""
+      // The menu bakes in the active context (hiding Go to / Move to for the
+      // context you are in); the first context-sync may run before the config
+      // loads, so ensure a regeneration happens once it has.
+      Qt.callLater(function() { root.maybeRegenerateMenu() })
     } catch (e) {
       root.lastError = "config JSON parse failed: " + e
     }
@@ -102,6 +106,7 @@ Item {
   // seed), falling back to the focusedWorkspace singleton only if the map has
   // no entry for the focused monitor. Does NOT rebuild the per-monitor map.
   function syncMonitors() {
+    var prevCtx = root.currentContextId
     var focusedName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
     var nameChanged = (focusedName || "default") !== root.focusedMonitorName
     root.focusedMonitorName = focusedName || "default"
@@ -130,6 +135,7 @@ Item {
       root.currentContextId = fallback
     }
     if (changed) root.stateUpdated()
+    if (root.currentContextId !== prevCtx) root.maybeRegenerateMenu()
   }
 
   // (Monitor change handling is wired via Hyprland singleton signals below —
@@ -468,6 +474,54 @@ Item {
     runMutation("(.contexts = [.contexts[] | if .id == $id then .name = $name else . end])",
       { id: id, name: name }, false)
   }
+  // Path-scoped item mutations. scope "" = the context's top-level menu;
+  // "1.0" = .menu[1].items[0].items (submenu nesting; invalid hops are a
+  // no-op). The jq walk passes only value args: the runtime jq (jaq)
+  // evaluates filter-type function arguments against the caller's input,
+  // which breaks recursion, and lacks setpath/getpath — hence the op-switch
+  // inside the def. ops: add | delete | update | reorder (a/b = --arg values).
+    function scopeMutationFilter(op) {
+    return "def apply_into($idx; $op; $a; $b):\n" +
+      "  if ($idx | length) == 0 then\n" +
+      "    if   $op == \"add\"    then . + [ $a | fromjson ]\n" +
+      "    elif $op == \"delete\" then map(select(.label != $a))\n" +
+      "    elif $op == \"update\" then map(if .label == $a then ($b | fromjson) else . end)\n" +
+      "    elif $op == \"move\"   then ( $a | fromjson ) as $mv\n" +
+      "        | if ($mv.sourceLabel // \"\") == \"\" then .\n" +
+      "          else\n" +
+      "            ( (map(.label) | index($mv.sourceLabel)) as $si\n" +
+      "              | if $si == null then .\n" +
+      "                else\n" +
+      "                  ( .[$si] ) as $it\n" +
+      "                  | (.[:$si] + .[$si+1:]) as $rest\n" +
+      "                  | (if ($mv.newLabel // \"\") != \"\" then\n" +
+      "                       ($rest + [{label: $mv.newLabel, icon: \"\", type: \"submenu\", items: []}])\n" +
+      "                     else $rest end) as $arr2\n" +
+      "                  | (($arr2 | map(.label) | index(if ($mv.newLabel // \"\") != \"\" then $mv.newLabel else $mv.targetLabel end)) as $ti\n" +
+      "                     | if (($mv.newLabel // \"\") == \"\" and $ti == null) or\n" +
+      "                          ($ti != null and (($arr2[$ti].type // \"\") != \"submenu\" or $arr2[$ti].label == $it.label)) then .\n" +
+      "                       else\n" +
+      "                         ($arr2[$ti] as $target\n" +
+      "                          | ($arr2 | map(\n" +
+      "                              if .label == $target.label then\n" +
+      "                                .items = ((.items // []) + [$it])\n" +
+      "                              else . end)))\n" +
+      "                       end)\n" +
+      "                end)\n" +
+      "          end\n" +
+      "    else                      ( $a | fromjson )\n" +
+      "    end\n" +
+      "  else\n" +
+      "    ($idx[0] as $i\n" +
+      "     | if $i >= length then .\n" +
+      "       else .[0:$i] + [ (.[$i] | if has(\"items\") then .items |= apply_into($idx[1:]; $op; $a; $b) else . end) ] + .[$i+1:]\n" +
+      "       end)\n" +
+      "  end;\n" +
+      "(if $scope == \"\" then [] else ($scope | split(\".\") | map(tonumber)) end) as $idx\n" +
+      "| (.contexts = [.contexts[] | if .id == $cid then\n" +
+      "      .menu = (.menu | apply_into($idx; \"" + op + "\"; $a; $b))\n" +
+      "    else . end])"
+  }
 
   function setContextShortcut(id, shortcut) {
     runMutation("(.contexts = [.contexts[] | if .id == $id then .shortcut = $shortcut else . end])",
@@ -522,33 +576,49 @@ Item {
       { cid: contextId, label: label, icon: icon || "" }, false)
   }
 
-  function deleteItem(contextId, label) {
-    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu = [.menu[] | select(.label != $label)] else . end])",
-      { cid: contextId, label: label }, false)
+  // Delete the item labelled `label` from the menu array at `scope` ("" =
+  // top level). Labels must be unique within a scope.
+  function deleteItem(contextId, label, scope) {
+    runMutation(root.scopeMutationFilter("delete"),
+      { cid: contextId, scope: scope || "", a: label, b: "" }, false)
   }
 
-  // Add a fully-formed item (label, icon, type + type-specific fields) to a
-  // context's menu. itemJson is the complete item object.
-  function addItemObject(contextId, itemJson) {
-    if (!Model.contextExists(root.config, contextId)) { root.lastError = "unknown context: " + contextId; return "unknown" }
-    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu += [$item | fromjson] else . end])",
-      { cid: contextId, item: itemJson }, false)
+  // Move the item labelled `sourceLabel` of the menu array at `scope` into a
+  // submenu in the same scope: an existing one (targetLabel) or a freshly
+  // created one (newLabel). Resolution by label (not position) makes the move
+  // immune to stale panel snapshots — the service always operates on its
+  // current config. One atomic write: the source is removed from the scope
+  // and appended to the target submenu's items.
+  function moveItemIntoSubmenu(contextId, scope, sourceLabel, targetLabel, newLabel) {
+    runMutation(root.scopeMutationFilter("move"),
+      { cid: contextId, scope: scope || "", a: JSON.stringify({ sourceLabel: sourceLabel || "", targetLabel: targetLabel || "", newLabel: newLabel || "" }), b: "" }, false)
     return "ok"
   }
 
-  // Replace a context's entire menu with a reordered list (array of item
-  // objects, serialized as menuJson).
-  function reorderItems(contextId, menuJson) {
+  // Add a fully-formed item (label, icon, type + type-specific fields) to
+  // the menu array at `scope` ("" = top level). itemJson is the complete
+  // item object.
+  function addItemObject(contextId, itemJson, scope) {
     if (!Model.contextExists(root.config, contextId)) { root.lastError = "unknown context: " + contextId; return "unknown" }
-    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu = ($menu | fromjson) else . end])",
-      { cid: contextId, menu: menuJson }, false)
+    runMutation(root.scopeMutationFilter("add"),
+      { cid: contextId, scope: scope || "", a: itemJson, b: "" }, false)
     return "ok"
   }
 
-  // Replace the menu item whose label == oldLabel with a fully-formed object.
-  function updateItem(contextId, oldLabel, itemJson) {
-    runMutation("(.contexts = [.contexts[] | if .id == $cid then .menu = [.menu[] | if .label == $old then ($item | fromjson) else . end] else . end])",
-      { cid: contextId, old: oldLabel, item: itemJson }, false)
+  // Replace the menu array at `scope` ("" = top level) with a reordered
+  // list of item objects (serialized as menuJson).
+  function reorderItems(contextId, scope, menuJson) {
+    if (!Model.contextExists(root.config, contextId)) { root.lastError = "unknown context: " + contextId; return "unknown" }
+    runMutation(root.scopeMutationFilter("reorder"),
+      { cid: contextId, scope: scope || "", a: menuJson, b: "" }, false)
+    return "ok"
+  }
+
+  // Replace the item labelled `oldLabel` in the menu array at `scope` (""
+  // = top level) with a fully-formed object.
+  function updateItem(contextId, scope, oldLabel, itemJson) {
+    runMutation(root.scopeMutationFilter("update"),
+      { cid: contextId, scope: scope || "", a: oldLabel, b: itemJson }, false)
     return "ok"
   }
 
@@ -573,12 +643,26 @@ Item {
   // it, so the launcher reflects config edits (add/edit/delete items, renames,
   // shortcut/icon changes). Uses its own Process so it never collides with the
   // binding regeneration on dispatchProc.
+  // Context baked into the last menu generation ("" = none yet). The menu
+  // hides "Go to <ctx>" / "Move to <ctx>" for the context you are already
+  // in, so it must be regenerated when the active context changes. Set at
+  // call time so a context change during an in-flight generation triggers a
+  // follow-up one (last write wins).
+  property string menuContextId: ""
+
   function regenerateMenu() {
+    root.menuContextId = root.currentContextId
     var p = menuProc
     p.command = ["bash", "-lc",
-      "omarchy-context-generate --menu > \"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\" && " +
+      "omarchy-context-generate --menu --context " + Util.shellQuote(root.currentContextId) + " > \"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\" && " +
       "omarchy menu refresh >/dev/null 2>&1"]
     p.running = true
+  }
+
+  // Regenerate the launcher menu only when the active context changed.
+  function maybeRegenerateMenu() {
+    if (root.currentContextId !== root.menuContextId && root.configLoaded)
+      root.regenerateMenu()
   }
 
   Process { id: menuProc }
@@ -601,13 +685,15 @@ Item {
   function closePopup() { if (root.popup) root.popup.close(); return "ok" }
 
   // Open the editor at a specific management view (used by the system menu's
-  // management actions). view: editContextNew | editContext | items | editItem.
-  function openEditor(view, contextId, itemIndex) {
+  // management actions). view: editContextNew | editContext | editItem |
+  // reorder. itemPath addresses the item relative to the context's menu:
+  // "" (top level / add), "2", "2.1", "2.add" (add into scope "2").
+  function openEditor(view, contextId, itemPath) {
     var p = root.popup
     if (!p) return "error"
     p.requestMode = view
     p.requestContext = contextId || ""
-    p.requestItemIndex = (itemIndex === undefined || itemIndex === null) ? -1 : itemIndex
+    p.requestItemPath = String(itemPath === undefined || itemPath === null ? "" : itemPath)
     p.open()
     return "ok"
   }
@@ -730,6 +816,7 @@ Item {
   // re-derive focus + context, bumping bars when anything changed.
   function setMonitorWorkspace(monitor, wsId, focused) {
     if (!monitor) return
+    var prevCtx = root.currentContextId
     var map = Object.assign({}, root.monitorActiveWorkspace || {})
     map[monitor] = wsId
     if (focused) root.focusedMonitorName = monitor
@@ -750,6 +837,7 @@ Item {
       }
     }
     if (changed) root.stateUpdated()
+    if (root.currentContextId !== prevCtx) root.maybeRegenerateMenu()
   }
 
   Connections {
@@ -809,16 +897,17 @@ Item {
     function addItem(contextId: string, label: string, url: string, icon: string): string { return root.addItem(contextId, label, url, icon) }
     function renameItem(contextId: string, oldLabel: string, newLabel: string): string { root.renameItem(contextId, oldLabel, newLabel); return "ok" }
     function setItemIcon(contextId: string, label: string, icon: string): string { root.setItemIcon(contextId, label, icon); return "ok" }
-    function deleteItem(contextId: string, label: string): string { root.deleteItem(contextId, label); return "ok" }
-    function addItemObject(contextId: string, itemJson: string): string { return root.addItemObject(contextId, itemJson) }
-    function updateItem(contextId: string, oldLabel: string, itemJson: string): string { return root.updateItem(contextId, oldLabel, itemJson) }
-    function reorderItems(contextId: string, menuJson: string): string { return root.reorderItems(contextId, menuJson) }
+    function deleteItem(contextId: string, label: string, scope: string): string { root.deleteItem(contextId, label, scope || ""); return "ok" }
+    function addItemObject(contextId: string, itemJson: string, scope: string): string { return root.addItemObject(contextId, itemJson, scope || "") }
+    function updateItem(contextId: string, scope: string, oldLabel: string, itemJson: string): string { root.updateItem(contextId, scope || "", oldLabel, itemJson); return "ok" }
+    function reorderItems(contextId: string, scope: string, menuJson: string): string { return root.reorderItems(contextId, scope || "", menuJson) }
+    function moveItem(contextId: string, scope: string, sourceLabel: string, targetLabel: string, newLabel: string): string { return root.moveItemIntoSubmenu(contextId, scope, sourceLabel, targetLabel, newLabel) }
     function menu(contextId: string): string { return root.openPopup(contextId) }
     function popup(): string { return root.openPopup("") }
     function openPopup(contextId: string): string { return root.openPopup(contextId) }
     function togglePopup(): string { return root.togglePopup() }
     function closePopup(): string { return root.closePopup() }
-    function edit(view: string, contextId: string, itemIndex: int): string { return root.openEditor(view, contextId, itemIndex) }
+    function edit(view: string, contextId: string, itemPath: string): string { return root.openEditor(view, contextId, itemPath) }
     function status(): string {
       return JSON.stringify({ configLoaded: root.configLoaded, stateLoaded: root.stateLoaded,
         focusedMonitor: root.focusedMonitorName, currentContext: root.currentContextId,

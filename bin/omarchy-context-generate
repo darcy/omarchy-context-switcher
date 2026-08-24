@@ -15,16 +15,17 @@ CONFIG_FILE="${HOME}/.config/context-switcher/config.json"
 CONFIG=$(cat "$CONFIG_FILE")
 [[ -n "$CONFIG" ]] || { echo "error: empty config" >&2; exit 1; }
 
-mode=""
-while (( $# )); do
+current=""
+ while (( $# )); do
   case "$1" in
     --bindings) mode=bindings ;;
     --menu) mode=menu ;;
+    --context) current="${2:-}"; shift ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
   shift
-done
-[[ -n "$mode" ]] || { echo "usage: $0 --bindings|--menu" >&2; exit 1; }
+ done
+[[ -n "$mode" ]] || { echo "usage: $0 --bindings|--menu [--context <id>]" >&2; exit 1; }
 
 gen_bindings() {
   cat <<'LUA'
@@ -82,45 +83,59 @@ LUA
 # that summon the dedicated editor. "Add context" and "Edit JSON file" sit at
 # the bottom of the picker.
 gen_menu() {
-  echo "$CONFIG" | jq '
-    reduce .contexts[] as $ctx ({};
-      $ctx.id as $cid |
-      . as $acc |
-      $acc
+  echo "$CONFIG" | jq --arg current "$current" '
+    def emit_edit($cid; $base; $path; $label):
+  .[($base + ".~edit")] = { icon: "󰏪", label: ("Edit " + $label), action: ("omarchy-context reorder " + $cid + (if $path == "" then "" else (" " + $path) end)) };
+
+    def emit_items($cid; $base; $path; $profile; $items):
+      reduce ($items | to_entries)[] as $e (.;
+        if ($e.value.type // "") == "browser" then .
+        elif ($e.value.type // "") == "submenu" then
+          (($e.key|tostring) as $k
+           | ($path + (if $path == "" then "" else "." end) + $k) as $p
+           | ($base + "." + $e.value.label) as $sub
+           | ($e.value.icon // "󰉋") as $ic
+           | .[$sub] = { icon: $ic, label: $e.value.label, target: $sub }
+           | emit_edit($cid; $sub; $p; $e.value.label)
+           | emit_items($cid; $sub; $p; $profile; ($e.value.items // [])))
+        elif ($e.value.type // "") == "web" then
+          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰅂"), label: $e.value.label, action: ("omarchy-context-launch " + ($profile | @json) + " " + ($e.value.url | @json)) }
+        elif ($e.value.type // "") == "mosh" then
+          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰒵"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e mosh " + ($e.value.host | @json)) }
+        elif ($e.value.type // "") == "ssh" then
+          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰒵"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e ssh " + ($e.value.host | @json)) }
+        elif ($e.value.type // "") == "terminal" then
+          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰆍"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e sh -c " + ($e.value.command | @json)) }
+        else
+          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰆍"), label: $e.value.label, action: $e.value.command }
+        end);
+
+    def emit_context($ctx):
+      ($ctx.id) as $cid
+      | ($ctx.icon // "󰯆") as $ic
+      | ($ctx.name // $cid) as $cn
+      | ($ctx.menu // []) as $items
       | ($ctx.chrome_profile // "") as $explicit
       | (.default_chrome_profile // "Default") as $dp
       | (if $explicit == "" then $dp else $explicit end) as $profile
-      | .["contexts." + $cid] = { icon: ($ctx.icon // "󰯆"), label: ($ctx.name // $cid), target: ("contexts." + $cid + ".menu") }
-      | .["contexts." + $cid + ".menu"] = { icon: ($ctx.icon // "󰯆"), label: ($ctx.name // $cid) }
-      | .["contexts." + $cid + ".menu.!go-to"] = { icon: "󰁔", label: ("Go to " + ($ctx.name // $cid)), action: ("omarchy-context switch " + $cid) }
+      | .[("contexts." + $cid)] = { icon: $ic, label: $cn, target: ("contexts." + $cid + ".menu") }
+      | .[("contexts." + $cid + ".menu")] = { icon: $ic, label: $cn }
+      | (if ($current // "") == $cid then .
+         else
+           .[("contexts." + $cid + ".menu.!go-to")] = { icon: "󰁔", label: ("Go to " + $cn), action: ("omarchy-context switch " + $cid) }
+           | .[("contexts." + $cid + ".menu.!move-ws")] = { icon: "󰄾", label: ("Move to " + $cn), action: ("omarchy-context move-workspace " + $cid) }
+         end)
       | (if $explicit != "" then
-           .["contexts." + $cid + ".menu.!browser"] = { icon: "󰖟", label: "Browser", action: ("omarchy-context-launch " + ($profile | @json)) }
+           .[("contexts." + $cid + ".menu.!browser")] = { icon: "󰖟", label: "Browser", action: ("omarchy-context-launch " + ($profile | @json)) }
          else . end)
-      | reduce ($ctx.menu // [])[] as $item (.;
-          if ($item.type // "") != "browser" then
-            .["contexts." + $cid + ".menu." + $item.label] =
-              (if $item.type == "web" then { icon: ($item.icon // "󰅂"), label: $item.label, action: ("omarchy-context-launch " + ($profile | @json) + " " + ($item.url | @json)) }
-               elif $item.type == "mosh" then { icon: ($item.icon // "󰒵"), label: $item.label, action: ("alacritty --title " + ($item.label | @json) + " -e mosh " + ($item.host | @json)) }
-               elif $item.type == "ssh" then { icon: ($item.icon // "󰒵"), label: $item.label, action: ("alacritty --title " + ($item.label | @json) + " -e ssh " + ($item.host | @json)) }
-               elif $item.type == "terminal" then { icon: ($item.icon // "󰆍"), label: $item.label, action: ("alacritty --title " + ($item.label | @json) + " -e sh -c " + ($item.command | @json)) }
-               else { icon: ($item.icon // "󰆍"), label: $item.label, action: $item.command } end)
-          else . end)
-      | .["contexts." + $cid + ".menu.~edit"] = { icon: "󰏪", label: ("Edit " + ($ctx.name // $cid)), target: ("contexts." + $cid + ".menu.~edit.menu") }
-      | .["contexts." + $cid + ".menu.~edit.menu"] = { icon: "󰏪", label: ("Edit " + ($ctx.name // $cid)) }
-      | .["contexts." + $cid + ".menu.~edit.menu.!details"] = { icon: "󰏪", label: "Edit details", action: ("omarchy-context edit " + $cid) }
-      | .["contexts." + $cid + ".menu.~edit.menu.!add"] = { icon: "󰐕", label: "Add item", action: ("omarchy-context edit-item " + $cid + " add") }
-      | .["contexts." + $cid + ".menu.~edit.menu.!reorder"] = { icon: "", label: "Reorder Items", action: ("omarchy-context reorder " + $cid) }
-      | reduce range(0; ($ctx.menu | length)) as $i (.;
-          $ctx.menu[$i] as $it |
-          .["contexts." + $cid + ".menu.~edit.menu.e" + ($i|tostring)] =
-            { icon: "󰏪", label: ("Edit " + $it.label), action: ("omarchy-context edit-item " + $cid + " " + ($i|tostring)) }
-        )
-      | .["contexts." + $cid + ".menu.~move-ws"] = { icon: "󰄾", label: ("Move to " + ($ctx.name // $cid)), action: ("omarchy-context move-workspace " + $cid) }
-    )
+      | emit_items($cid; ("contexts." + $cid + ".menu"); ""; $profile; $items)
+      | emit_edit($cid; ("contexts." + $cid + ".menu"); ""; $cn);
+
+    reduce .contexts[] as $ctx ({}; . + (emit_context($ctx)))
     | { contexts: { icon: "󰯆", label: "Contexts" } }
     + .
-    + { "contexts.~add": { icon: "󰙁", label: "Add context", action: "omarchy-context edit new" },
-        "contexts.~json": { icon: "󰄛", label: "Edit JSON file", action: "omarchy-context edit-json" } }' 2>&1
+    + { "contexts.~add": { icon: "", label: "Add context", action: "omarchy-context edit new" },
+        "contexts.~json": { icon: "", label: "Edit JSON file", action: "omarchy-context edit-json" } }' 2>&1
 }
 
 if [[ "$mode" == "bindings" ]]; then

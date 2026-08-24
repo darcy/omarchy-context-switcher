@@ -22,21 +22,15 @@ Commands:
   menu [context]        Open the system menu (picker, or a context's items)
   edit new              Open the editor to add a context
   edit <ctx>            Open the editor for a context
-  edit-item <ctx> add   Open the editor to add an item
-  edit-item <ctx> <i>   Open the editor to edit item index <i>
-  reorder <ctx>         Open the editor to reorder a context's items
+  edit-item <ctx> add   Open the editor to add an item (top level)
+  edit-item <ctx> <path>     Edit the item at index path (e.g. 2, 2.1 for nested submenu items)
+  edit-item <ctx> <path>.add Open the editor to add an item inside the submenu at <path>
+  reorder <ctx> [path]  Open the editor to reorder a context's items (or a submenu's, via path)
   edit-json             Edit the config file
-  add-context <name> <shortcut> [icon]  Create a new context
-  create-context <name> <shortcut> [icon]  Alias for add-context
-  rename-context <id> <name>        Rename a context
-  set-shortcut <id> <shortcut>      Change a context's keybinding letter
-  set-icon <id> <icon>              Change a context's icon
-  set-profile <id> <profile|->      Set a context's Chrome profile (use - to clear)
-  delete-context <id> [target]      Delete a context, moving its windows to [target]
-  add-item <ctx> <title> <url> [icon]  Add a web item to a context
-  rename-item <ctx> <old-title> <new-title>  Rename an item
-  set-item-icon <ctx> <title> <icon>  Change an item's icon
-  delete-item <ctx> <title>        Delete an item from a context
+  add-item <ctx> <title> <url> [icon]  Add a web item to a context (top-level menu)
+  rename-item <ctx> <old-title> <new-title>  Rename an item (top-level menu)
+  set-item-icon <ctx> <title> <icon>  Change an item's icon (top-level menu)
+  delete-item <ctx> <title>        Delete an item from a context (top-level menu)
   validate              Validate config.json
   status                Print service status JSON
 EOF
@@ -105,9 +99,9 @@ case "$cmd" in
   menu)          if [[ -n "${1:-}" ]]; then omarchy menu summon "contexts.${1:-}"; else omarchy menu summon contexts; fi ;;
   edit)          if [[ "${1:-}" == "new" ]]; then omarchy-shell context edit editContextNew "" 0
                  else omarchy-shell context edit editContext "${1:-}" 0; fi ;;
-  edit-item)     if [[ "${2:-}" == "add" ]]; then omarchy-shell context edit editItem "${1:-}" -1
-                 else omarchy-shell context edit editItem "${1:-}" "${2:-}"; fi ;;
-  reorder)       omarchy-shell context edit reorder "${1:-}" 0 ;;
+  edit-item)     if [[ -z "${2:-}" ]]; then echo "Usage: omarchy-context edit-item <ctx> add|<path>[.add]" >&2; exit 1; fi
+                 omarchy-shell context edit editItem "${1:-}" "${2:-}" ;;
+  reorder)       omarchy-shell context edit reorder "${1:-}" "${2:-}" ;;
   edit-json)     alacritty --title 'context-switcher config' -e nvim ~/.config/context-switcher/config.json ;;
   add-context|create-context) omarchy-shell context addContext "${1:-}" "${2:-}" "${3:-}" ;;
   rename-context) omarchy-shell context renameContext "${1:-}" "${2:-}" ;;
