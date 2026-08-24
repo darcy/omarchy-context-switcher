@@ -41,7 +41,6 @@ Panel {
   property string itemPath: ""
   property string itemScope: ""
   property string reorderPath: ""
-  property string managePath: ""
   property bool confirmOpen: false
   property var confirmAction: null
   property string confirmMessage: ""
@@ -91,7 +90,9 @@ Panel {
     itemUrlField.activeFocus || itemHostField.activeFocus || itemCommandField.activeFocus || itemWorkdirField.activeFocus ||
     typeGroup.activeFocus || subTypeGroup.activeFocus ||
     deleteItemBtn.activeFocus || cancelItemBtn.activeFocus || saveItemBtn.activeFocus ||
-    ctxIconPicker.activeFocus || itemIconPicker.activeFocus
+    ctxIconPicker.activeFocus || itemIconPicker.activeFocus ||
+    subNameField.activeFocus || subIconField.activeFocus || subIconPicker.activeFocus ||
+    subDeleteBtn.activeFocus || subCancelBtn.activeFocus || subSaveBtn.activeFocus
 
   function contextById(id) {
     return Model.contextById(config, id)
@@ -153,7 +154,7 @@ Panel {
     root.controller.show()
     if (root.view === "editContext") root.focusField(ctxNameField)
     else if (root.view === "editItem") root.focusField(itemTitleField)
-    else if (root.view === "manage") root.focusField(manageList)
+    else if (root.view === "editSubmenu") root.focusField(subNameField)
     else root.focusField(reorderList)
   }
 
@@ -203,8 +204,7 @@ Panel {
     if (root.confirmOpen) { root.confirmOpen = false; return }
     if (root.view === "reorderMove") { root.cancelMoveToSubmenu(); return }
     if (root.view === "reorder") { root.commitReorder(); return }
-    if (root.view === "manage") { root.startEditItem(root.contextId, root.managePath); return }
-    if (root.view === "editItem") {
+    if (root.view === "editItem" || root.view === "editSubmenu") {
       if (root.editingFromReorder) root.returnToReorder("cancel")
       else root.returnToSystemMenu("contexts." + root.contextId + ".menu")
     }
@@ -357,14 +357,60 @@ Panel {
     root.contextId = cid // must precede itemAtPath: helpers resolve via contextId
     var item = root.itemAtPath(path)
     if (!item) return
+    if (item.type === "submenu") { root.startEditSubmenu(cid, path); return } // folders use the context-style form
     root.itemAddMode = false; root.itemPath = String(path || "")
     root.fillItemForm(item)
     root.view = "editItem"
     root.focusField(itemTitleField)
   }
 
+  // Folder (submenu) details — same shape as the context form (name + icon),
+  // editing the folder item in its parent scope. The folder type is fixed:
+  // it cannot be converted from/to.
+  function startEditSubmenu(cid, path) {
+    if (!root.contextById(cid)) return
+    root.contextId = cid
+    var item = root.itemAtPath(path)
+    if (!item || item.type !== "submenu") return
+    root.itemAddMode = false
+    root.itemPath = String(path || "")
+    root.oldItemLabel = item.label || ""
+    subNameField.text = item.label || ""
+    subIconField.text = item.icon || ""
+    root.view = "editSubmenu"
+    root.focusField(subNameField)
+  }
+
+  function applySubmenuSave() {
+    var label = subNameField.text.trim()
+    if (!label) return
+    var existing = root.itemAtPath(root.itemPath)
+    var o = { label: label, icon: subIconField.text.trim(), type: "submenu", items: (existing && existing.items) ? existing.items : [] }
+    var back = root.editingFromReorder
+    if (service) service.updateItem(root.contextId, root.itemPath, root.oldItemLabel, JSON.stringify(o))
+    if (back) root.returnToReorder("edit", root.oldItemLabel, o)
+    else root.close()
+  }
+
+  function requestDeleteSubmenu() {
+    var item = root.itemAtPath(root.itemPath)
+    if (!item) return
+    var label = root.oldItemLabel || item.label
+    var cname = (root.currentContext && root.currentContext.name) || root.contextId
+    var scope = root.pathScope(root.itemPath)
+    root.confirmMessage = "Delete folder \u201c" + label + "\u201d and everything inside it from \u201c" + cname + "\u201d?"
+    root.confirmAction = function() {
+      if (service) service.deleteItem(root.contextId, label, scope)
+      if (root.editingFromReorder) root.returnToReorder("delete", label)
+      else root.close()
+    }
+    root.confirmOpen = true
+    Qt.callLater(function() { confirmGrab.forceActiveFocus() })
+  }
+
   // Activate the highlighted row: rows 0/1 are the list's action entries
-  // (Edit details / Add item), the rest open the item's edit form.
+  // (Edit details / Add item); the rest open the item's edit form — folders
+  // open the context-style folder form instead.
   function editReorderSelection() {
     if (root.reorderSelected === 0) { root.editDetailsFromReorder(); return }
     if (root.reorderSelected === 1) { root.addItemFromReorder(); return }
@@ -372,14 +418,18 @@ Panel {
     if (itemSel < 0 || itemSel >= root.reorderOrder.length) return
     var path = root.reorderPath ? root.reorderPath + "." + itemSel : String(itemSel)
     root.editingFromReorder = true
+    if (root.reorderOrder[itemSel] && root.reorderOrder[itemSel].type === "submenu") {
+      root.startEditSubmenu(root.contextId, path)
+      return
+    }
     root.startEditItem(root.contextId, path)
   }
 
   // "Edit details" from the move/edit list: the context's details, or the
-  // submenu item's details when editing a nested scope.
+  // folder's details when editing a nested scope (same form layout).
   function editDetailsFromReorder() {
     root.editingFromReorder = true
-    if (root.reorderPath) root.startEditItem(root.contextId, root.reorderPath)
+    if (root.reorderPath) root.startEditSubmenu(root.contextId, root.reorderPath)
     else root.startEditContext(root.contextId)
   }
 
@@ -388,6 +438,85 @@ Panel {
   function addItemFromReorder() {
     root.editingFromReorder = true
     root.startAddItem(root.contextId, root.reorderPath)
+  }
+
+  // ---- Reorder / move-edit list ----
+
+  function startReorder(cid, scope) {
+    var c = root.contextById(cid)
+    if (!c) return
+    root.contextId = cid // must precede menuItemsAt: helpers resolve via contextId
+    root.reorderPath = String(scope || "")
+    var arr = root.menuItemsAt(root.reorderPath)
+    if (!Array.isArray(arr)) return
+    root.reorderOrder = arr.slice()
+    root.reorderSelected = 0
+    root.shiftHeld = false
+    root.view = "reorder"
+    root.focusField(reorderList)
+  }
+
+  // Display-index space: 0/1 = actions, 2 = separator, 3 = hint, 4+ = items.
+  // The cursor only ever lands on interactive rows (actions + items), so
+  // selection steps map through the compact interactive space.
+  function reorderIndexToInteractive(d) {
+    return d < root.reorderDisplayOffset ? d : d - 2
+  }
+  function reorderInteractiveToDisplay(i) {
+    return i < root.reorderActionCount ? i : i + 2
+  }
+  function clampReorderSelection() {
+    var cur = root.reorderIndexToInteractive(root.reorderSelected)
+    var maxI = root.reorderOrder.length + root.reorderActionCount - 1
+    if (cur < 0) cur = 0
+    if (cur > maxI) cur = maxI
+    root.reorderSelected = root.reorderInteractiveToDisplay(cur)
+  }
+
+  // Icon for a row in the move/edit list: rows 0/1 are the list's actions
+  // (Edit details / Add item); the highlighted item row shows a pencil
+  // (Enter edits it) or, while Shift is held (Shift+↑/↓ reorder), a move
+  // icon; other item rows keep their own icon (folders default to a folder
+  // glyph when none is set).
+  function reorderIconFor(index) {
+    if (index === 0) return "\uf044"
+    if (index === 1) return "\uf067"
+    if (index < root.reorderDisplayOffset) return "" // separator / hint rows
+    if (index !== root.reorderSelected) {
+      var it = root.reorderOrder[index - root.reorderDisplayOffset]
+      if (it) return it.icon || (it.type === "submenu" ? "\uf07b" : "")
+      return ""
+    }
+    return root.shiftHeld ? "\uf0dc" : "\uf044"
+  }
+
+  function selectReorder(dy) {
+    var n = root.reorderOrder.length + root.reorderActionCount
+    if (n <= 0) return
+    var cur = root.reorderIndexToInteractive(root.reorderSelected)
+    cur = (cur + dy + n) % n
+    root.reorderSelected = root.reorderInteractiveToDisplay(cur)
+    reorderList.positionViewAtIndex(root.reorderSelected, ListView.Contain)
+  }
+
+  function moveReorder(dy) {
+    var from = root.reorderSelected
+    var to = from + dy
+    // Item rows only (action/separator/hint rows are not reorderable).
+    if (from < root.reorderDisplayOffset || to < root.reorderDisplayOffset || to > root.reorderOrder.length + root.reorderDisplayOffset - 1) return
+    var arr = root.reorderOrder.slice()
+    var it = arr.splice(from - root.reorderDisplayOffset, 1)[0]
+    arr.splice(to - root.reorderDisplayOffset, 0, it)
+    root.reorderOrder = arr
+    root.reorderSelected = to
+    reorderList.positionViewAtIndex(to, ListView.Contain)
+  }
+
+  // Commit the reordered list to the config, then close the editor entirely.
+  function commitReorder() {
+    if (service && root.reorderOrder.length)
+      service.reorderItems(root.contextId, root.reorderPath, JSON.stringify(root.reorderOrder))
+    root.close()
   }
 
   // ---- Icon picker (nerd-font cheat-sheet search) ----
@@ -465,9 +594,6 @@ Panel {
       if (itemWorkdirField.text.trim()) o.workdir = itemWorkdirField.text.trim()
     } else if (t === "terminal" || t === "script") {
       o.command = itemCommandField.text.trim()
-    } else if (t === "submenu") {
-      var existing = root.itemAddMode ? null : root.itemAtPath(root.itemPath)
-      o.items = (existing && existing.items) ? existing.items : []
     }
     return o
   }
@@ -477,7 +603,7 @@ Panel {
     if (root.itemType === "web") return itemUrlField
     if (root.itemType === "remote") return itemHostField
     if (root.itemType === "terminal" || root.itemType === "script") return itemCommandField
-    return itemIconField // submenu: title -> icon, icon Enter saves
+    return itemIconField
   }
 
   function applyItemSave() {
@@ -507,96 +633,6 @@ Panel {
     }
     root.confirmOpen = true
     Qt.callLater(function() { confirmGrab.forceActiveFocus() })
-  }
-
-  // Open the manage view for an existing submenu: add items, reorder, and
-  // edit individual children, mirroring the context's own edit menu.
-  function startManage(path) {
-    var item = root.itemAtPath(path)
-    if (!item) return
-    root.managePath = String(path || "")
-    root.view = "manage"
-    root.focusField(manageList)
-  }
-
-  // ---- Reorder items ----
-
-  function startReorder(cid, scope) {
-    var c = root.contextById(cid)
-    if (!c) return
-    root.contextId = cid // must precede menuItemsAt: helpers resolve via contextId
-    root.reorderPath = String(scope || "")
-    var arr = root.menuItemsAt(root.reorderPath)
-    if (!Array.isArray(arr)) return
-    root.reorderOrder = arr.slice()
-    root.reorderSelected = 0
-    root.shiftHeld = false
-    root.view = "reorder"
-    root.focusField(reorderList)
-  }
-
-  // Icon for a row in the move/edit list: the highlighted row shows a pencil
-  // (Enter edits it) or, while Shift is held (Shift+↑/↓ reorder), a move
-  // icon; all other rows keep their own icon.
-  // Display-index space: 0/1 = actions, 2 = separator, 3 = hint, 4+ = items.
-  // The cursor only ever lands on interactive rows (actions + items), so
-  // selection steps map through the compact interactive space.
-  function reorderIndexToInteractive(d) {
-    return d < root.reorderDisplayOffset ? d : d - 2
-  }
-  function reorderInteractiveToDisplay(i) {
-    return i < root.reorderActionCount ? i : i + 2
-  }
-  function clampReorderSelection() {
-    var cur = root.reorderIndexToInteractive(root.reorderSelected)
-    var maxI = root.reorderOrder.length + root.reorderActionCount - 1
-    if (cur < 0) cur = 0
-    if (cur > maxI) cur = maxI
-    root.reorderSelected = root.reorderInteractiveToDisplay(cur)
-  }
-
-  // Icon for a row in the move/edit list: rows 0/1 are the list's actions
-  // (Edit details / Add item); the highlighted item row shows a pencil
-  // (Enter edits it) or, while Shift is held (Shift+↑/↓ reorder), a move
-  // icon; other item rows keep their own icon.
-  function reorderIconFor(index) {
-    if (index === 0) return "\uf044"
-    if (index === 1) return "\uf067"
-    if (index < root.reorderDisplayOffset) return "" // separator / hint rows
-    if (index !== root.reorderSelected) {
-      var it = root.reorderOrder[index - root.reorderDisplayOffset]
-      return (it && it.icon) || ""
-    }
-    return root.shiftHeld ? "\uf0dc" : "\uf044"
-  }
-
-  function selectReorder(dy) {
-    var n = root.reorderOrder.length + root.reorderActionCount
-    if (n <= 0) return
-    var cur = root.reorderIndexToInteractive(root.reorderSelected)
-    cur = (cur + dy + n) % n
-    root.reorderSelected = root.reorderInteractiveToDisplay(cur)
-    reorderList.positionViewAtIndex(root.reorderSelected, ListView.Contain)
-  }
-
-  function moveReorder(dy) {
-    var from = root.reorderSelected
-    var to = from + dy
-    // Item rows only (action/separator/hint rows are not reorderable).
-    if (from < root.reorderDisplayOffset || to < root.reorderDisplayOffset || to > root.reorderOrder.length + root.reorderDisplayOffset - 1) return
-    var arr = root.reorderOrder.slice()
-    var it = arr.splice(from - root.reorderDisplayOffset, 1)[0]
-    arr.splice(to - root.reorderDisplayOffset, 0, it)
-    root.reorderOrder = arr
-    root.reorderSelected = to
-    reorderList.positionViewAtIndex(to, ListView.Contain)
-  }
-
-  // Commit the reordered list to the config, then close the editor entirely.
-  function commitReorder() {
-    if (service && root.reorderOrder.length)
-      service.reorderItems(root.contextId, root.reorderPath, JSON.stringify(root.reorderOrder))
-    root.close()
   }
 
   // ---- Move an item into a submenu (reorder view, m key) ----
@@ -724,8 +760,8 @@ Panel {
     ? (root.headerHeight + reorderColumn.implicitHeight)
     : (root.view === "reorderMove"
       ? (root.headerHeight + root.reorderMoveColumnHeight)
-      : (root.view === "manage"
-        ? (root.headerHeight + manageColumn.implicitHeight)
+      : (root.view === "editSubmenu"
+        ? (root.headerHeight + subColumn.implicitHeight)
         : (root.headerHeight + formColumn.implicitHeight)))
   readonly property int cardHeight: Math.min(panel.height - Style.gapsOut * 2, contentH + pad * 2)
   readonly property string headerTitle: {
@@ -736,28 +772,12 @@ Panel {
       var suffix = (root.reorderPath && rt && rt.label) ? " \u203a " + rt.label : ""
       return "Move/Edit Items \u2014 " + ((root.currentContext && root.currentContext.name) || root.contextId || "") + suffix
     }
-    if (root.view === "manage") {
-      var m = root.itemAtPath(root.managePath)
-      return "Manage \u2014 " + ((m && m.label) || "")
-    }
+    if (root.view === "editSubmenu")
+      return "Edit folder"
     if (root.view === "editContext") return root.editingAdd ? "New context" : "Edit context"
     return root.itemAddMode ? "Add item" : "Edit item"
   }
 
-  // Type row is locked (hidden) for an existing submenu that has children, so
-  // a type conversion can never silently drop the subtree.
-  readonly property bool itemTypeLocked: {
-    if (root.itemType !== "submenu" || root.itemAddMode) return false
-    var it = root.itemAtPath(root.itemPath)
-    return !!(it && it.items && it.items.length > 0)
-  }
-
-  // Children of the submenu being managed (manage view list model).
-  readonly property var manageItems: {
-    var it = root.managePath ? root.itemAtPath(root.managePath) : null
-    return (it && it.items) ? it.items : []
-  }
-  readonly property int manageListCount: root.manageItems.length
 
   // Centered overlay, mirroring the omarchy Menu: a full-screen layer-shell
   // with a scrim and a card centered on the screen (not anchored to the bar).
@@ -934,17 +954,15 @@ Panel {
               width: parent.width
               spacing: Style.spacing.xs
 
-              PanelSectionHeader { visible: !root.itemTypeLocked; text: "Type" }
+              PanelSectionHeader { text: "Type" }
               ButtonGroup {
                 id: typeGroup
-                visible: !root.itemTypeLocked
                 width: parent.width
                 options: [
                   { value: "web", label: "Web" },
                   { value: "remote", label: "Remote" },
                   { value: "terminal", label: "Terminal" },
                   { value: "script", label: "Script" },
-                  { value: "submenu", label: "Submenu" }
                 ]
                 value: root.itemType
                 onChanged: function(v) { root.itemType = v }
@@ -968,7 +986,7 @@ Panel {
                   : root.itemType === "remote" ? "Connect via Mosh or SSH in a new terminal"
                   : root.itemType === "terminal" ? "Run a command in a new terminal window (output stays visible)"
                   : root.itemType === "script" ? "Run a command directly (no window)"
-                  : root.itemType === "submenu" ? "Group items under a nested submenu" : ""
+                  : ""
                 color: root.dim
                 font.family: root.fam
                 font.pixelSize: Style.font.caption
@@ -993,8 +1011,7 @@ Panel {
                   Layout.fillWidth: true
                   placeholderText: "\uf1d4"
                   onAccepted: {
-                    if (root.itemType === "submenu") root.applyItemSave()
-                    else if (root.firstTypeField()) root.firstTypeField().forceActiveFocus()
+                    if (root.firstTypeField()) root.firstTypeField().forceActiveFocus()
                   }
                   Keys.onEscapePressed: root.cancelEdit()
                 }
@@ -1050,19 +1067,6 @@ Panel {
                 Keys.onEscapePressed: root.cancelEdit()
               }
 
-              // Existing submenus get a manage entry (children live at the
-              // same level as this form's parent menu, one scope deeper).
-              Button {
-                visible: root.itemType === "submenu" && !root.itemAddMode
-                width: parent.width
-                bordered: true
-                text: {
-                  var it = root.itemAtPath(root.itemPath)
-                  var n = (it && it.items) ? it.items.length : 0
-                  return "Manage items (" + n + ")"
-                }
-                onClicked: root.startManage(root.itemPath)
-              }
 
               RowLayout {
                 width: parent.width
@@ -1098,42 +1102,42 @@ Panel {
             }
           }
 
-        // Manage view: a submenu's own edit menu (add / reorder / edit
-        // individual children), mirroring the context-level edit list.
+        // Folder (submenu) details — mirrors the context form (name + icon
+        // only). Type is fixed to submenu; add/reorder/edit of children live
+        // in the folder's Move/Edit Items screen.
         Column {
-          id: manageColumn
-          visible: root.view === "manage"
+          id: subColumn
+          visible: root.view === "editSubmenu"
           width: parent.width
           spacing: Style.spacing.xs
 
-          Text {
+          PanelSectionHeader { text: "Name" }
+          TextField {
+            id: subNameField
             width: parent.width
-            text: root.manageListCount > 0 ? "Click an item to edit it, or add / reorder below."
-                                           : "No items yet \u2014 add one below."
-            color: root.dim
-            font.family: root.fam
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
+            placeholderText: "Folder name"
+            onAccepted: root.focusField(subIconField)
+            Keys.onEscapePressed: root.cancelEdit()
           }
 
-          ListView {
-            id: manageList
+          PanelSectionHeader { text: "Icon (nerd font glyph)" }
+          RowLayout {
             width: parent.width
-            height: Math.min(root.manageListCount * (root.reorderRowHeight + Style.spacing.xs), root.reorderMaxHeight)
-            clip: true
-            model: root.manageItems
-            spacing: Style.spacing.xs
-            boundsBehavior: Flickable.StopAtBounds
-            focus: true
-
-            delegate: Button {
-              required property int index
-              required property var modelData
-              width: ListView.view.width
-              height: root.reorderRowHeight
-              horizontalPadding: Style.space(12)
-              text: (modelData.icon || "\uf07b") + "  " + (modelData.label || "(untitled)") + "  \uf044"
-              onClicked: root.startEditItem(root.contextId, root.managePath + "." + index)
+            spacing: Style.space(8)
+            TextField {
+              id: subIconField
+              Layout.fillWidth: true
+              placeholderText: "\uf07b"
+              onAccepted: root.applySubmenuSave()
+              Keys.onEscapePressed: root.cancelEdit()
+            }
+            SearchableDropdown {
+              id: subIconPicker
+              Layout.preferredWidth: Style.space(150)
+              showLabel: false
+              placeholderText: "Pick an icon\u2026"
+              options: root.iconOptions
+              onChanged: function(v) { subIconField.text = root.iconGlyphHex(v) }
             }
           }
 
@@ -1141,103 +1145,30 @@ Panel {
             width: parent.width
             spacing: Style.space(8)
             Button {
-              text: "Add item"
-              onClicked: root.startAddItem(root.contextId, root.managePath)
-            }
-            Button {
-              text: "Move/Edit Items"
-              onClicked: root.startReorder(root.contextId, root.managePath)
+              id: subDeleteBtn
+              text: "Delete"
+              foreground: Color.urgent
+              bordered: true
+              focusable: true
+              Keys.onEscapePressed: root.cancelEdit()
+              onClicked: root.requestDeleteSubmenu()
             }
             Item { Layout.fillWidth: true }
-          }
-        }
-
-        // Move-to-submenu chooser (reorder view, m key): pick an existing
-        // submenu in this scope or create a new one, then return to reorder.
-        Column {
-          visible: root.view === "reorderMove"
-          width: parent.width
-          spacing: Style.spacing.xs
-
-          ListView {
-            id: reorderMoveList
-            width: parent.width
-            height: root.reorderMoveListHeight
-            clip: true
-            model: root.moveTargets
-            spacing: Style.spacing.xs
-            boundsBehavior: Flickable.StopAtBounds
-            focus: true
-
-            Keys.onPressed: function(event) {
-              if (root.view !== "reorderMove" || root.moveNewMode) return
-              if (event.key === Qt.Key_Escape) { root.cancelMoveToSubmenu(); event.accepted = true; return }
-              if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { root.executeMoveTarget(); event.accepted = true; return }
-              if (event.key === Qt.Key_Up) { root.selectMoveTarget(-1); event.accepted = true; return }
-              if (event.key === Qt.Key_Down) { root.selectMoveTarget(1); event.accepted = true; return }
-              if (event.text === "j" || event.text === "J") { root.selectMoveTarget(1); event.accepted = true; return }
-              if (event.text === "k" || event.text === "K") { root.selectMoveTarget(-1); event.accepted = true; return }
+            Button {
+              id: subCancelBtn
+              text: "Cancel"
+              focusable: true
+              Keys.onEscapePressed: root.cancelEdit()
+              onClicked: root.cancelEdit()
             }
-
-            delegate: BorderSurface {
-              required property int index
-              required property var modelData
-
-              readonly property bool hasCursor: root.view === "reorderMove" && root.moveSelected === index
-
-              width: ListView.view.width
-              height: root.reorderRowHeight
-              radius: Style.cornerRadius
-              color: hasCursor ? root.selectedBg : "transparent"
-              borderSpec: hasCursor ? Border.flat(root.acc, Math.max(1, Style.normalBorderWidth)) : Border.none()
-
-              RowLayout {
-                anchors.fill: parent
-                spacing: Style.space(8)
-
-                Text {
-                  Layout.preferredWidth: Style.space(24)
-                  Layout.alignment: Qt.AlignVCenter
-                  text: modelData.kind === "new" ? "\uf067" : "\uf07b"
-                  color: root.fg
-                  font.family: root.fam
-                  font.pixelSize: Style.font.icon
-                  horizontalAlignment: Text.AlignHCenter
-                }
-
-                Text {
-                  Layout.fillWidth: true
-                  Layout.alignment: Qt.AlignVCenter
-                  text: modelData.label
-                  color: root.fg
-                  font.family: root.fam
-                  font.pixelSize: Style.font.body
-                  elide: Text.ElideRight
-                }
-              }
+            Button {
+              id: subSaveBtn
+              text: "Save"
+              accent: Color.accent
+              focusable: true
+              Keys.onEscapePressed: root.cancelEdit()
+              onClicked: root.applySubmenuSave()
             }
-          }
-
-          TextField {
-            id: moveNewField
-            visible: root.moveNewMode
-            width: parent.width
-            placeholderText: "New submenu name"
-            onAccepted: root.executeNewSubmenuMove(moveNewField.text)
-            Keys.onEscapePressed: {
-              root.moveNewMode = false
-              Qt.callLater(function() { root.focusField(reorderMoveList) })
-            }
-          }
-
-          Text {
-            visible: root.moveNewMode
-            width: parent.width
-            text: "Enter creates the submenu and moves the item \u00b7 Esc back to the list"
-            color: root.dim
-            font.family: root.fam
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
           }
         }
 
