@@ -1,0 +1,22 @@
+#!/bin/bash
+# omarchy-context-init: create the default Context Switcher config on first
+# run when none exists. Personal is context 0 (workspaces 1..N), so any
+# existing workspaces land in Personal; Work follows in the next block.
+set -euo pipefail
+
+CFG="$HOME/.config/context-switcher/config.json"
+[[ -s "$CFG" ]] && { echo "exists"; exit 0; }
+
+mkdir -p "$(dirname "$CFG")"
+cat > "$CFG" <<'EOF'
+{
+  "version": 1,
+  "slots": 10,
+  "default_chrome_profile": "Default",
+  "contexts": [
+    { "id": "personal", "name": "Personal", "icon": "\uf1d4", "shortcut": "P", "menu": [] },
+    { "id": "work", "name": "Work", "icon": "\uf1d4", "shortcut": "W", "menu": [] }
+  ]
+}
+EOF
+echo "created"

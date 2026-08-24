@@ -47,9 +47,17 @@ echo "--- Config ---"
 if [[ ! -f "$CONFIG_FILE" ]]; then
   mkdir -p "$(dirname "$CONFIG_FILE")"
   cat > "$CONFIG_FILE" <<'JSON'
-{ "version": 1, "slots": 10, "default_chrome_profile": "Default", "contexts": [] }
+{
+  "version": 1,
+  "slots": 10,
+  "default_chrome_profile": "Default",
+  "contexts": [
+    { "id": "personal", "name": "Personal", "icon": "\uf1d4", "shortcut": "P", "menu": [] },
+    { "id": "work", "name": "Work", "icon": "\uf1d4", "shortcut": "W", "menu": [] }
+  ]
+}
 JSON
-  echo "Created empty default config: $CONFIG_FILE"
+  echo "Created default config (Personal + Work): $CONFIG_FILE"
 fi
   # 4. Generated keybindings -> ~/.config/hypr/context-bindings.lua
   echo "--- Keybindings ---"

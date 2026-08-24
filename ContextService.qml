@@ -56,7 +56,17 @@ Item {
 
   function applyConfig(raw) {
     var text = String(raw || "").trim()
-    if (!text) { root.lastError = "config not found: " + root.configFile; return }
+    if (!text) {
+      // First run: bootstrap the default config (Personal + Work; existing
+      // workspaces fall into Personal as context 0), then reload + build the
+      // generated files.
+      if (!root.configBootstrapDone) {
+        root.configBootstrapDone = true
+        initProc.command = ["bash", "-lc", "omarchy-context-init >/dev/null 2>&1"]
+        initProc.running = true
+      }
+      return
+    }
     try {
       var parsed = JSON.parse(text)
       if (!parsed.contexts || !Array.isArray(parsed.contexts)) {
@@ -649,6 +659,8 @@ Item {
   // call time so a context change during an in-flight generation triggers a
   // follow-up one (last write wins).
   property string menuContextId: ""
+  // Set once the first-run init has run, to avoid bootstrap loops.
+  property bool configBootstrapDone: false
 
   function regenerateMenu() {
     root.menuContextId = root.currentContextId
@@ -685,7 +697,48 @@ Item {
     return "ok"
   }
 
-  Process { id: menuProc }
+    Process {
+    id: menuProc
+  }
+
+  // First-run config bootstrap: on success reload the config and regenerate
+  // the bindings + menu that depend on it existing.
+  Process {
+    id: initProc
+    onExited: function(exitCode, exitStatus) {
+      if (exitCode === 0 && exitStatus === 0) {
+        root.loadConfig()
+        Qt.callLater(function() {
+          root.regenerateBindings()
+          root.regenerateMenu()
+        })
+      }
+    }
+  }
+
+  // The bar layout (which workspace widget is shown) is enforced by Omarchy's
+  // own bar tooling, which rewrites shell.json — so re-apply the invariant on
+  // a short interval: the left section must end in exactly context-switcher
+  // with no omarchy.workspaces, then tell the running shell to reload it.
+  function enforceBarLayout() {
+    barFixProc.command = ["bash", "-lc",
+      "SJ=\"$HOME/.config/omarchy/shell.json\"\n" +
+      "[[ -f \"$SJ\" ]] || exit 0\n" +
+      "B=$(md5sum \"$SJ\" | cut -d' ' -f1)\n" +
+      "jq '(.bar.layout.left) = ([.bar.layout.left[]? | select(.id != \"omarchy.workspaces\" and .id != \"context-switcher\")] + [{\"id\": \"context-switcher\"}])' \"$SJ\" > \"$SJ.tmp\" && mv \"$SJ.tmp\" \"$SJ\"\n" +
+      "A=$(md5sum \"$SJ\" | cut -d' ' -f1)\n" +
+      "if [[ \"$B\" != \"$A\" ]]; then omarchy-shell shell reloadConfig >/dev/null 2>&1 || true; fi"]
+    barFixProc.running = true
+  }
+
+  Timer {
+    interval: 5000
+    repeat: true
+    running: root.configLoaded
+    onTriggered: root.enforceBarLayout()
+  }
+
+  Process { id: barFixProc }
 
   // ---- Context popup (centered overlay) ----
   //
