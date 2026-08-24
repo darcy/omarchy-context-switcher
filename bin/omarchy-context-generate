@@ -84,8 +84,25 @@ LUA
 # the bottom of the picker.
 gen_menu() {
   echo "$CONFIG" | jq --arg current "$current" '
-    def emit_edit($cid; $base; $path; $label):
-  .[($base + ".~edit")] = { icon: "󰏪", label: ("Edit " + $label), action: ("omarchy-context reorder " + $cid + (if $path == "" then "" else (" " + $path) end)) };
+    # One "Edit <folder>" entry per folder in the context, recursing into nested
+# folders (path-encoded action; dot-free key to stay a single menu route).
+def emit_folder_edits($cid; $base; $path; $items):
+  reduce ($items | to_entries)[] as $e (.;
+    if ($e.value.type // "") == "submenu" then
+      (($e.key|tostring) as $k
+       | ($path + (if $path == "" then $k else ("_" + $k) end)) as $p
+       | .[($base + ".ef" + $p)] = { icon: "󰉋", label: ("Edit " + ($e.value.label // "")),
+           action: ("omarchy-context reorder " + $cid + " " + (if $path == "" then $k else ($path + "." + $k) end)) }
+       | emit_folder_edits($cid; $base; $p; ($e.value.items // [])))
+    else . end);
+
+def emit_edit($cid; $base; $path; $label; $items; $detailsAction):
+  .[($base + ".~edit")] = { icon: "󰏪", label: ("Edit " + $label), action: ("omarchy-context reorder " + $cid + (if $path == "" then "" else (" " + $path) end)) }
+  | .[($base + ".~edit.menu")] = { icon: "󰏪", label: ("Edit " + $label) }
+  | .[($base + ".~edit.menu.!details")] = { icon: "󰏪", label: "Edit details", action: $detailsAction }
+  | .[($base + ".~edit.menu.!add")] = { icon: "󰐕", label: "Add item", action: ("omarchy-context edit-item " + $cid + " " + (if $path == "" then "add" else ($path + ".add") end)) }
+  | .[($base + ".~edit.menu.!reorder")] = { icon: "", label: "Move/Edit Items", action: ("omarchy-context reorder " + $cid + (if $path == "" then "" else (" " + $path) end)) }
+  | emit_folder_edits($cid; ($base + ".~edit.menu"); ""; $items);
 
     def emit_items($cid; $base; $path; $profile; $items):
       reduce ($items | to_entries)[] as $e (.;
@@ -94,10 +111,9 @@ gen_menu() {
           (($e.key|tostring) as $k
            | ($path + (if $path == "" then "" else "." end) + $k) as $p
            | ($base + "." + $e.value.label) as $sub
-           | ($e.value.icon // "󰉋") as $ic
-           | .[$sub] = { icon: $ic, label: $e.value.label, target: $sub }
-           | emit_edit($cid; $sub; $p; $e.value.label)
-           | emit_items($cid; $sub; $p; $profile; ($e.value.items // [])))
+                  | (if ($e.value.icon // "") == "" then "󰉋" else $e.value.icon end) as $ic
+       | .[$sub] = { icon: $ic, label: $e.value.label, target: $sub }
+       | emit_items($cid; $sub; $p; $profile; ($e.value.items // [])))
         elif ($e.value.type // "") == "web" then
           .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰅂"), label: $e.value.label, action: ("omarchy-context-launch " + ($profile | @json) + " " + ($e.value.url | @json)) }
         elif ($e.value.type // "") == "mosh" then
@@ -129,7 +145,7 @@ gen_menu() {
            .[("contexts." + $cid + ".menu.!browser")] = { icon: "󰖟", label: "Browser", action: ("omarchy-context-launch " + ($profile | @json)) }
          else . end)
       | emit_items($cid; ("contexts." + $cid + ".menu"); ""; $profile; $items)
-      | emit_edit($cid; ("contexts." + $cid + ".menu"); ""; $cn);
+      | emit_edit($cid; ("contexts." + $cid + ".menu"); ""; $cn; $items; ("omarchy-context edit " + $cid));
 
     reduce .contexts[] as $ctx ({}; . + (emit_context($ctx)))
     | { contexts: { icon: "󰯆", label: "Contexts" } }
