@@ -84,7 +84,16 @@ omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
 echo "--- Cleaning generated context bindings/menu ---"
 if [[ -f "$BINDINGS_LUA" ]]; then
   cp -a "$BINDINGS_LUA" "$BINDINGS_LUA.bak.context-disable"
-  sed -i '/context-bindings.lua/d' "$BINDINGS_LUA"
+  # Strip both the dofile include and the generated-bindings banner (see
+  # teardown) so no orphaned comment stays behind after disabling.
+  python3 - "$BINDINGS_LUA" <<'PY'
+import sys
+p = sys.argv[1]
+keep = [l for l in open(p).read().splitlines()
+        if "context-bindings.lua" not in l
+        and not l.startswith("-- Context Switcher generated bindings")]
+open(p, "w").write("\n".join(keep).rstrip() + "\n")
+PY
 fi
 rm -f "$CTX_BINDINGS"
 rm -f "$MENU_EXT"

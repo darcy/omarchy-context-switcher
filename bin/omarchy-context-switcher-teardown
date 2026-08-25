@@ -60,10 +60,19 @@ for old, new in old_to_new.items():
         time.sleep(0.05)
 PY
 
-# 3. Remove generated context bindings source + menu extension.
+# 3. Remove generated context bindings source + menu extension. Strip BOTH the
+#    dofile include AND the "-- Context Switcher generated bindings" banner
+#    setup appends, so repeated enable/disable cycles leave no orphaned lines.
 if [[ -f "$BINDINGS_LUA" ]]; then
   cp -a "$BINDINGS_LUA" "$BINDINGS_LUA.bak.context-teardown"
-  sed -i '/context-bindings.lua/d' "$BINDINGS_LUA"
+  python3 - "$BINDINGS_LUA" <<'PY'
+import sys
+p = sys.argv[1]
+keep = [l for l in open(p).read().splitlines()
+        if "context-bindings.lua" not in l
+        and not l.startswith("-- Context Switcher generated bindings")]
+open(p, "w").write("\n".join(keep).rstrip() + "\n")
+PY
 fi
 rm -f "$CTX_BINDINGS" "$MENU_EXT"
 

@@ -46,6 +46,16 @@ LUA
     "o.bind(\"SUPER + ALT + " + (.shortcut | ascii_upcase) + "\", \"" + (.name // .id) + " menu\", \"omarchy-context-switcher menu " + .id + "\")"
   '
   echo
+  # Browser: launch the default Chrome profile explicitly — Omarchy's default
+  # binding opens the last-used profile. Lives here (not the user's global
+  # bindings.lua) so it tracks the plugin and disappears on disable/teardown.
+  echo "$CONFIG" | jq -r '
+    (.default_chrome_profile // "Default") as $p |
+    "-- Browser: force the " + $p + " Chrome profile (Omarchy opens the last-used profile).",
+    "hl.unbind(\"SUPER + SHIFT + B\")",
+    "o.bind(\"SUPER + SHIFT + B\", \"Browser\", \"omarchy-context-switcher-launch \\\"" + $p + "\\\"\")"
+  '
+  echo
   # Slot keys: SUPER+1..0 goto, SUPER+SHIFT+1..0 move, SUPER+SHIFT+ALT+1..0 move-silent.
   cat <<'LUA'
 -- Slot keys within the active context (uses code:10..19 for the number row).
