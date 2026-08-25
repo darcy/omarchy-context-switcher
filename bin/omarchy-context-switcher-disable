@@ -27,10 +27,13 @@ if [[ -f "$SHELL_JSON" ]]; then
   cp -a "$SHELL_JSON" "$SHELL_JSON.bak.context-disable"
   # Replace context-switcher in left section with omarchy.workspaces (if the
   # default isn't already present); otherwise just drop context-switcher.
+  T=$(mktemp "$SHELL_JSON.XXXXXX") || exit 1
+  trap 'rm -f "$T"' EXIT
   jq '(.bar.layout.left) = (
         [.bar.layout.left[] | select(.id != "context-switcher" and .id != "omarchy.workspaces")]
         + [{"id": "omarchy.workspaces"}]
-      )' "$SHELL_JSON" > "$SHELL_JSON.tmp" && mv "$SHELL_JSON.tmp" "$SHELL_JSON"
+      )' "$SHELL_JSON" > "$T" && chmod 0644 "$T" && mv "$T" "$SHELL_JSON"
+  trap - EXIT
 fi
 
 # 2. Consolidate all open workspaces to a contiguous default set (1..N).

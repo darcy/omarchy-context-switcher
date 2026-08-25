@@ -12,7 +12,12 @@ set -euo pipefail
 
 CONFIG_FILE="${HOME}/.config/context-switcher/config.json"
 [[ -f "$CONFIG_FILE" ]] || { echo "error: $CONFIG_FILE not found" >&2; exit 1; }
-CONFIG=$(cat "$CONFIG_FILE")
+SIZE=$(stat -c %s "$CONFIG_FILE" 2>/dev/null || echo 0)
+if [[ ! "$SIZE" =~ ^[0-9]+$ || "$SIZE" -gt 262144 ]]; then
+  echo "error: $CONFIG_FILE exceeds the 256 KiB limit" >&2; exit 1
+fi
+# Bounded + timeout: a replaced FIFO or huge file can't stall or inflate us.
+CONFIG=$(timeout 5 cat "$CONFIG_FILE")
 [[ -n "$CONFIG" ]] || { echo "error: empty config" >&2; exit 1; }
 
 current=""

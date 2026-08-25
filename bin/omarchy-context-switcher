@@ -39,44 +39,6 @@ EOF
 
 CONFIG_FILE="${HOME}/.config/context-switcher/config.json"
 
-slugify() {
-  echo "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//'
-}
-
-cmd_create_context() {
-  local name="${1:-}" shortcut="${2:-}" icon="${3:-✦}"
-  [[ -n "$name" ]] || { echo "Usage: omarchy-context-switcher create-context <name> <shortcut> [icon]" >&2; exit 1; }
-  [[ -n "$shortcut" ]] || { echo "Usage: omarchy-context-switcher create-context <name> <shortcut> [icon]" >&2; exit 1; }
-  [[ -f "$CONFIG_FILE" ]] || { echo "error: $CONFIG_FILE not found" >&2; exit 1; }
-  local slug
-  slug=$(slugify "$name")
-  local exists
-  exists=$(jq --arg id "$slug" '[.contexts[] | select(.id == $id)] | length' "$CONFIG_FILE")
-  if (( exists > 0 )); then echo "Error: context '$slug' already exists" >&2; exit 1; fi
-  local tmp
-  tmp=$(mktemp)
-  jq --arg id "$slug" --arg name "$name" --arg shortcut "$shortcut" --arg icon "$icon" \
-    '.contexts += [{id: $id, name: $name, shortcut: $shortcut, icon: $icon, menu: []}]' "$CONFIG_FILE" > "$tmp"
-  mv "$tmp" "$CONFIG_FILE"
-  echo "Created context '$slug' ($name) with shortcut $shortcut"
-  echo "Run omarchy-context-switcher-generate and reload to apply bindings/menu."
-}
-
-cmd_delete_context() {
-  local id="${1:-}"
-  [[ -n "$id" ]] || { echo "Usage: omarchy-context-switcher delete-context <id>" >&2; exit 1; }
-  [[ -f "$CONFIG_FILE" ]] || { echo "error: $CONFIG_FILE not found" >&2; exit 1; }
-  local exists
-  exists=$(jq --arg id "$id" '[.contexts[] | select(.id == $id)] | length' "$CONFIG_FILE")
-  if (( exists == 0 )); then echo "Error: context '$id' does not exist" >&2; exit 1; fi
-  local tmp
-  tmp=$(mktemp)
-  jq --arg id "$id" 'del(.contexts[] | select(.id == $id))' "$CONFIG_FILE" > "$tmp"
-  mv "$tmp" "$CONFIG_FILE"
-  echo "Deleted context '$id'"
-  echo "Run omarchy-context-switcher-generate and reload to apply bindings/menu."
-}
-
 if (( $# < 1 )); then
   usage
   exit 1
@@ -105,7 +67,10 @@ case "$cmd" in
   reorder)       omarchy-shell context edit reorder "${1:-}" "${2:-}" ;;
   edit-json)     alacritty --title 'context-switcher config' -e nvim ~/.config/context-switcher/config.json ;;
   reload)        omarchy-shell context reloadConfig ;;
-  add-context|create-context) omarchy-shell context addContext "${1:-}" "${2:-}" "${3:-}" ;;
+  add-context|create-context)
+    profile=$(jq -r '.default_chrome_profile // "Default"' "$CONFIG_FILE" 2>/dev/null)
+    [[ -n "$profile" && "$profile" != "null" ]] || profile="Default"
+    omarchy-shell context addContext "${1:-}" "${2:-}" "${3:-}" "$profile" ;;
   rename-context) omarchy-shell context renameContext "${1:-}" "${2:-}" ;;
   set-shortcut)  omarchy-shell context setShortcut "${1:-}" "${2:-}" ;;
   set-icon)      omarchy-shell context setIcon "${1:-}" "${2:-}" ;;

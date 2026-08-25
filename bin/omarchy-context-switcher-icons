@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import urllib.request
 
 CACHE = os.path.expanduser("~/.cache/context-switcher/nerd-icons.json")
@@ -43,8 +44,8 @@ def main() -> int:
             print("error: empty glyph list")
             return 1
         os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-        tmp = CACHE + ".tmp"
-        with open(tmp, "w") as f:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CACHE) or ".", prefix=os.path.basename(CACHE) + ".", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
             json.dump(entries, f, separators=(",", ":"))
         os.replace(tmp, CACHE)
         print(CACHE)

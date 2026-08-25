@@ -539,7 +539,15 @@ Panel {
   function applyIconCache(raw) {
     var text = String(raw || "").trim()
     if (!text || text.indexOf("/") !== 0) return
-    iconReadProc.command = ["bash", "-lc", "cat " + Util.shellQuote(text) + " 2>/dev/null || true"]
+    // Bounded read (regular file, ≤ 16 MiB — the glyph DB is ~660 KiB): a
+    // planted FIFO or oversized file can't stall the popup or inflate it.
+    iconReadProc.command = ["bash", "-lc",
+      "F=" + Util.shellQuote(text) + "\n" +
+      "[[ -e \"$F\" ]] || exit 0\n" +
+      "[[ -f \"$F\" ]] || exit 0\n" +
+      "S=$(stat -c %s \"$F\" 2>/dev/null)\n" +
+      "[[ -n \"${S:-0}\" && \"${S:-0}\" =~ ^[0-9]+$ && \"${S:-0}\" -le 16777216 ]] || exit 0\n" +
+      "timeout 10 cat \"$F\" 2>/dev/null"]
     iconReadProc.running = true
   }
 

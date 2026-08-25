@@ -44,18 +44,47 @@ Item {
 
   // ---- Config / state loading (via Process + SplitParser) ----
 
+  // Bounded reads: only regular files up to 256 KiB are streamed into QML, and
+  // a `timeout` caps any FIFO swapped in between the checks, so a replaced or
+  // planted file can neither stall the shell nor inflate its memory. The
+  // config probe emits sentinels so applyConfig can tell "missing" (bootstrap)
+  // apart from "present but unreadable" (error, never overwrite).
   function loadConfig() {
-    configProbe.command = ["bash", "-lc", "cat \"" + root.configFile + "\" 2>/dev/null || true"]
+    configProbe.command = ["bash", "-lc",
+      "F=" + Util.shellQuote(root.configFile) + "\n" +
+      "[[ -e \"$F\" ]] || exit 0\n" +
+      "[[ -f \"$F\" ]] || { echo '__CTX_NOT_REGULAR__'; exit 0; }\n" +
+      "S=$(stat -c %s \"$F\" 2>/dev/null)\n" +
+      "[[ -n \"${S:-0}\" && \"${S:-0}\" =~ ^[0-9]+$ && \"${S:-0}\" -le 262144 ]] || { echo '__CTX_OVERSIZE__'; exit 0; }\n" +
+      "timeout 5 cat \"$F\" 2>/dev/null"]
     configProbe.running = true
   }
 
   function loadState() {
-    stateProbe.command = ["bash", "-lc", "cat \"" + root.stateFile + "\" 2>/dev/null || true"]
+    stateProbe.command = ["bash", "-lc",
+      "F=" + Util.shellQuote(root.stateFile) + "\n" +
+      "[[ -e \"$F\" ]] || exit 0\n" +
+      "[[ -f \"$F\" ]] || exit 0\n" +
+      "S=$(stat -c %s \"$F\" 2>/dev/null)\n" +
+      "[[ -n \"${S:-0}\" && \"${S:-0}\" =~ ^[0-9]+$ && \"${S:-0}\" -le 262144 ]] || exit 0\n" +
+      "timeout 5 cat \"$F\" 2>/dev/null"]
     stateProbe.running = true
   }
 
   function applyConfig(raw) {
     var text = String(raw || "").trim()
+    if (text === "__CTX_NOT_REGULAR__") {
+      // Present but not a regular file (e.g. a planted FIFO): never bootstrap
+      // over it, and never let a later read block on it.
+      root.lastError = "config path is not a regular file: " + root.configFile
+      root.configBootstrapDone = true
+      return
+    }
+    if (text === "__CTX_OVERSIZE__") {
+      root.lastError = "config exceeds the 256 KiB read limit"
+      root.configBootstrapDone = true
+      return
+    }
     if (!text) {
       // First run: bootstrap the default config (Personal + Work; existing
       // workspaces fall into Personal as context 0), then reload + build the
@@ -96,8 +125,14 @@ Item {
 
   function persistState() {
     var json = JSON.stringify(root.state)
+    // Atomic via an unpredictable temp (mktemp) + rename: a planted symlink at
+    // the state path can never redirect the write, and a crash mid-write can
+    // never leave a truncated state file behind.
     stateWriter.command = ["bash", "-lc",
-      "mkdir -p \"" + root.stateDir + "\" && printf '%s' " + JSON.stringify(json) + " > \"" + root.stateFile + "\""]
+      "mkdir -p " + Util.shellQuote(root.stateDir) + "\n" +
+      "T=$(mktemp " + Util.shellQuote(root.stateFile + ".XXXXXX") + ") || exit 1\n" +
+      "trap 'rm -f \"$T\"' EXIT\n" +
+      "printf '%s' " + JSON.stringify(json) + " > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" " + Util.shellQuote(root.stateFile)]
     stateWriter.running = true
   }
 
@@ -471,9 +506,11 @@ Item {
     argv.push(jqFilter, root.configFile)
     var quoted = []
     for (var i = 0; i < argv.length; i++) quoted.push(Util.shellQuote(argv[i]))
-    var tmp = root.configFile + ".tmp"
-    var cmd = quoted.join(" ") + " > " + Util.shellQuote(tmp) +
-              " && mv " + Util.shellQuote(tmp) + " " + Util.shellQuote(root.configFile)
+    // mktemp (O_EXCL, unpredictable) + rename: no fixed .tmp path an attacker
+    // can pre-plant as a symlink to redirect the write into another file.
+    var cmd = "T=$(mktemp " + Util.shellQuote(root.configFile + ".XXXXXX") + ") || exit 1\n" +
+              "trap 'rm -f \"$T\"' EXIT\n" +
+              quoted.join(" ") + " > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" " + Util.shellQuote(root.configFile)
     mutateProc.regen = regen
     mutateProc.onDone = onDone || null
     mutateProc.command = ["bash", "-lc", cmd]
@@ -640,7 +677,10 @@ Item {
   function regenerateBindings() {
     var p = dispatchProc
     p.command = ["bash", "-lc",
-      "omarchy-context-switcher-generate --bindings > \"$HOME/.config/hypr/context-bindings.lua\"\n" +
+      "B=\"$HOME/.config/hypr/context-bindings.lua\"\n" +
+      "T=$(mktemp \"$B.XXXXXX\") || exit 1\n" +
+      "trap 'rm -f \"$T\"' EXIT\n" +
+      "omarchy-context-switcher-generate --bindings > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" \"$B\"\n" +
       "for i in $(seq 1 25); do\n" +
       "  hyprctl reload >/dev/null 2>&1\n" +
       "  sleep 0.1\n" +
@@ -665,14 +705,16 @@ Item {
   function regenerateMenu() {
     root.menuContextId = root.currentContextId
     var p = menuProc
-    // Write atomically: a failed generation (e.g. a temporarily invalid
-    // config being hand-edited) must never truncate the live extension out
-    // from under the launcher — the tmp file is only moved over on success.
-    var ext = "\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\""
-    var tmp = "\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc.tmp\""
+    // Write atomically via an unpredictable temp: a failed generation (e.g. a
+    // temporarily invalid config being hand-edited) must never truncate the
+    // live extension out from under the launcher, and no fixed .tmp path can
+    // be pre-planted as a symlink to redirect the write. Moved over only on
+    // success.
     p.command = ["bash", "-lc",
-      "omarchy-context-switcher-generate --menu --context " + Util.shellQuote(root.currentContextId) + " > " + tmp + " && " +
-      "mv " + tmp + " " + ext + " && " +
+      "EXT=\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\"\n" +
+      "T=$(mktemp \"$EXT.XXXXXX\") || exit 1\n" +
+      "trap 'rm -f \"$T\"' EXIT\n" +
+      "omarchy-context-switcher-generate --menu --context " + Util.shellQuote(root.currentContextId) + " > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" \"$EXT\" && " +
       "omarchy menu refresh >/dev/null 2>&1"]
     p.running = true
   }
@@ -725,7 +767,9 @@ Item {
       "SJ=\"$HOME/.config/omarchy/shell.json\"\n" +
       "[[ -f \"$SJ\" ]] || exit 0\n" +
       "B=$(md5sum \"$SJ\" | cut -d' ' -f1)\n" +
-      "jq '(.bar.layout.left) = ([.bar.layout.left[]? | select(.id != \"omarchy.workspaces\" and .id != \"context-switcher\")] + [{\"id\": \"context-switcher\"}])' \"$SJ\" > \"$SJ.tmp\" && mv \"$SJ.tmp\" \"$SJ\"\n" +
+      "T=$(mktemp \"$SJ.XXXXXX\") || exit 0\n" +
+      "trap 'rm -f \"$T\"' EXIT\n" +
+      "jq '(.bar.layout.left) = ([.bar.layout.left[]? | select(.id != \"omarchy.workspaces\" and .id != \"context-switcher\")] + [{\"id\": \"context-switcher\"}])' \"$SJ\" > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" \"$SJ\"\n" +
       "A=$(md5sum \"$SJ\" | cut -d' ' -f1)\n" +
       "if [[ \"$B\" != \"$A\" ]]; then omarchy-shell shell reloadConfig >/dev/null 2>&1 || true; fi"]
     barFixProc.running = true

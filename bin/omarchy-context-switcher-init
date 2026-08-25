@@ -5,10 +5,20 @@
 set -euo pipefail
 
 CFG="$HOME/.config/context-switcher/config.json"
+# A planted FIFO/socket at the config path would block or redirect a direct
+# write — refuse anything that is not a regular file, then write to an
+# unpredictable temp and rename over the target (rename never follows a
+# pre-planted symlink at $CFG).
+if [[ -e "$CFG" && ! -f "$CFG" ]]; then
+  echo "error: $CFG is not a regular file" >&2
+  exit 1
+fi
 [[ -s "$CFG" ]] && { echo "exists"; exit 0; }
 
 mkdir -p "$(dirname "$CFG")"
-cat > "$CFG" <<'EOF'
+T=$(mktemp "$CFG.XXXXXX") || exit 1
+trap 'rm -f "$T"' EXIT
+cat > "$T" <<'EOF'
 {
   "version": 1,
   "slots": 10,
@@ -19,4 +29,7 @@ cat > "$CFG" <<'EOF'
   ]
 }
 EOF
+chmod 0644 "$T"
+mv "$T" "$CFG"
+trap - EXIT
 echo "created"

@@ -18,8 +18,13 @@ reload_binds=0
 # 1. Bar layout: exactly one workspace widget — context-switcher (drop any
 #    leftover omarchy.workspaces). Applies on the next shell start.
 if [[ -f "$SHELL_JSON" ]]; then
+  # Atomic via mktemp + rename: no fixed .tmp path that a planted symlink
+  # could redirect; only moved over on success.
+  T=$(mktemp "$SHELL_JSON.XXXXXX") || exit 1
+  trap 'rm -f "$T"' EXIT
   jq '(.bar.layout.left) = ([.bar.layout.left[]? | select(.id != "omarchy.workspaces" and .id != "context-switcher")] + [{"id": "context-switcher"}])' \
-    "$SHELL_JSON" > "$SHELL_JSON.tmp" && mv "$SHELL_JSON.tmp" "$SHELL_JSON"
+    "$SHELL_JSON" > "$T" && chmod 0644 "$T" && mv "$T" "$SHELL_JSON"
+  trap - EXIT
 fi
 
 # 2. Regenerate files teardown (or a partial install) removed.
@@ -28,21 +33,36 @@ fi
 CFG_OK=""
 [[ -f "$HOME/.config/context-switcher/config.json" ]] && CFG_OK=1
 if [[ ! -s "$CTX_BINDINGS" && -n "$CFG_OK" ]]; then
-  if omarchy-context-switcher-generate --bindings > "$CTX_BINDINGS" 2>/dev/null; then
+  T=$(mktemp "$CTX_BINDINGS.XXXXXX") || exit 1
+  if omarchy-context-switcher-generate --bindings > "$T" 2>/dev/null && chmod 0644 "$T" && mv "$T" "$CTX_BINDINGS"; then
     reload_binds=1
+  else
+    rm -f "$T"
   fi
 fi
 if [[ ! -s "$MENU_EXT" && -n "$CFG_OK" ]]; then
-  omarchy-context-switcher-generate --menu > "$MENU_EXT" 2>/dev/null || true
+  T=$(mktemp "$MENU_EXT.XXXXXX") || exit 1
+  if omarchy-context-switcher-generate --menu > "$T" 2>/dev/null && chmod 0644 "$T" && mv "$T" "$MENU_EXT"; then
+    :
+  else
+    rm -f "$T"
+  fi
 fi
 
 # 3. bindings.lua include (dropped by teardown or omarchy rewrites).
+# Read-modify-write atomically: `>>` would follow a planted symlink at
+# $BINDINGS_LUA and append into the linked file.
 if [[ -f "$BINDINGS_LUA" ]] && ! grep -q 'context-bindings.lua' "$BINDINGS_LUA"; then
-  cat >> "$BINDINGS_LUA" <<'LUA'
+  T=$(mktemp "$BINDINGS_LUA.XXXXXX") || exit 1
+  trap 'rm -f "$T"' EXIT
+  cat "$BINDINGS_LUA" > "$T"
+  cat >> "$T" <<'LUA'
 
 -- Context Switcher generated bindings (menus, slots, cycle).
 dofile(os.getenv("HOME") .. "/.config/hypr/context-bindings.lua")
 LUA
+  chmod 0644 "$T" && mv "$T" "$BINDINGS_LUA"
+  trap - EXIT
   reload_binds=1
 fi
 

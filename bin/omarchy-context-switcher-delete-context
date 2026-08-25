@@ -16,7 +16,7 @@ STATE="$HOME/.local/state/context-switcher/context.json"
 export PATH="$HOME/.local/share/omarchy/bin:$PATH"
 
 python3 - "$id" "$target_id" "$CONFIG" "$STATE" <<'PY'
-import json, os, sys, subprocess, shlex, time
+import json, os, sys, subprocess, shlex, time, tempfile
 
 def run(c):
     return subprocess.run(c, shell=True, capture_output=True, text=True)
@@ -82,8 +82,8 @@ else:
         move_ws(src, dst)
 
 cfg["contexts"] = [c for c in ctxs if c.get("id") != cid]
-tmp = CONFIG + ".tmp"
-with open(tmp, "w") as f:
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CONFIG) or ".", prefix=os.path.basename(CONFIG) + ".", suffix=".tmp")
+with os.fdopen(fd, "w") as f:
     json.dump(cfg, f, indent=2)
 os.replace(tmp, CONFIG)
 
@@ -100,12 +100,20 @@ if os.path.exists(STATE):
             mc.pop(k, None)
             changed = True
         if changed:
-            with open(STATE, "w") as f:
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE) or ".", prefix=os.path.basename(STATE) + ".", suffix=".tmp")
+            with os.fdopen(fd, "w") as f:
                 json.dump(st, f)
+            os.replace(tmp, STATE)
     except Exception:
         pass
 PY
 
 # Deleting a context removes its shortcut binding; regenerate and reload.
-omarchy-context-switcher-generate --bindings > "$HOME/.config/hypr/context-bindings.lua"
+B="$HOME/.config/hypr/context-bindings.lua"
+T=$(mktemp "$B.XXXXXX")
+if omarchy-context-switcher-generate --bindings > "$T" && chmod 0644 "$T" && mv "$T" "$B"; then
+  :
+else
+  rm -f "$T"
+fi
 hyprctl reload >/dev/null 2>&1 || true
