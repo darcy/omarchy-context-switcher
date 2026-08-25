@@ -88,6 +88,43 @@ prefer to hand-edit (or `omarchy-context edit-json` opens it for you).
 Each context has a name, a one-letter shortcut, an optional Chrome profile,
 and a `menu` of launch items.
 
+> **Your config is never overwritten.** The plugin only creates
+> `~/.config/context-switcher/config.json` on first run when it doesn't exist;
+> if you already have one (or have hand-edited it), it's left untouched and
+> your contexts and edits are preserved across updates.
+
+## Removal
+
+**Temporarily disable** (removes the generated keybindings and menu section,
+restores the default workspace widget, but keeps your config and data):
+
+```bash
+omarchy plugin disable context-switcher
+```
+
+**Fully remove the plugin:**
+
+```bash
+omarchy plugin remove context-switcher
+```
+
+Removal cleans up the generated `context-bindings.lua`, the "Contexts" menu
+extension, and the bar layout. It does **not** delete
+`~/.config/context-switcher/config.json` — delete that folder yourself if you
+want to remove your contexts too.
+
+## External dependencies
+
+- **A Chromium-based browser** (Chromium, Chrome, Brave, Edge, …) as your
+  default web browser, for per-profile web-app and Browser launches.
+- **`jq`** — used for atomic config edits.
+- **`mosh` / `ssh`** — for remote items (optional; only if you use them).
+- **The Omarchy Nerd Font** (ships with Omarchy) for the menu/bar icons.
+
+## License
+
+[MIT](LICENSE) — © 2026 Darcy Brown.
+
 ## Notes
 
 - The `omarchy.*` namespace is reserved for first-party plugins, so this plugin
