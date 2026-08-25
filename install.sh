@@ -52,7 +52,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   "slots": 10,
   "default_chrome_profile": "Default",
   "contexts": [
-    { "id": "personal", "name": "Personal", "icon": "\uf4ff", "shortcut": "P", "menu": [] },
+    { "id": "personal", "name": "Personal", "icon": "\uf007", "shortcut": "P", "menu": [] },
     { "id": "work", "name": "Work", "icon": "\uf0b1", "shortcut": "W", "menu": [] }
   ]
 }

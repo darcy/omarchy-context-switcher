@@ -1,5 +1,7 @@
 # omarchy-context-switcher
 
+![Context menu](context-menu.png) ![Workspaces](workspace.png)
+
 Group your workspaces into named **contexts** — Personal, Work, Gaming, Infra,
 whatever fits how you actually work — each with its own set of workspaces, its
 own browser profile, and its own one-click launch menu.
@@ -39,12 +41,17 @@ a hobby, a side project, a machine — and hop between them freely.
 
 ## Get started
 
+Install as an omarchy plugin:
+
 ```bash
-./install.sh
+omarchy plugin add git@github.com:darcy/omarchy-context-switcher.git --enable --yes
+omarchy bar put context-switcher --section left
 ```
 
 This installs the plugin, wires up the keybindings, adds the "Contexts" menu,
 and places the widget on your bar.
+
+> If you've cloned the repo, `./install.sh` does the same thing directly.
 
 ### Daily driving
 
