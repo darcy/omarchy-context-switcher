@@ -1,6 +1,12 @@
 # omarchy-context-switcher
 
-![Context menu](context-menu.png) ![Workspaces](workspace.png)
+![Workspaces](img/work-workspace.png)
+![Context menu](img/context-menu.png) 
+![Work Menu](img/work-menu.png) 
+![Edit Context](img/edit-context.png) 
+![Add Webapp](img/add-webapp.png) 
+![Add Remote](img/add-remote.png) 
+![Add Terminal](img/add-terminal.png) 
 
 Group your workspaces into named **contexts** — Personal, Work, Gaming, Infra,
 whatever fits how you actually work — each with its own set of workspaces, its
