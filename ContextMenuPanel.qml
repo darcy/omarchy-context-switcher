@@ -587,6 +587,7 @@ Panel {
   function buildItemObject() {
     var o = { label: itemTitleField.text.trim(), icon: itemIconField.text.trim() }
     var t = root.itemType
+    if (t === "submenu") { o.type = "submenu"; o.items = []; return o }
     o.type = (t === "remote") ? root.itemRemoteKind : t
     if (t === "web") o.url = itemUrlField.text.trim()
     else if (t === "remote") {
@@ -964,6 +965,7 @@ Panel {
                   { value: "remote", label: "Remote" },
                   { value: "terminal", label: "Terminal" },
                   { value: "script", label: "Script" },
+                  { value: "submenu", label: "Submenu" },
                 ]
                 value: root.itemType
                 onChanged: function(v) { root.itemType = v }
@@ -987,6 +989,7 @@ Panel {
                   : root.itemType === "remote" ? "Connect via Mosh or SSH in a new terminal"
                   : root.itemType === "terminal" ? "Run a command in a new terminal window (output stays visible)"
                   : root.itemType === "script" ? "Run a command directly (no window)"
+                  : root.itemType === "submenu" ? "Group other items into a submenu"
                   : ""
                 color: root.dim
                 font.family: root.fam
@@ -1264,7 +1267,7 @@ Panel {
                 visible: modelData.kind === "hint"
                 width: parent.width
                 height: parent.height
-                text: modelData.label
+                text: modelData.label || ""
                 color: root.dim
                 font.family: root.fam
                 font.pixelSize: Style.font.caption
