@@ -29,8 +29,16 @@ if [[ -e "$PLUGIN_DST/manifest.json" ]]; then
 fi
 rm -rf "$PLUGIN_DST"
 mkdir -p "$PLUGIN_DST"
-cp -a "$REPO/manifest.json" "$REPO/ContextService.qml" "$REPO/ContextBarWidget.qml" "$REPO/ContextMenuPanel.qml" "$REPO/ContextModel.js" "$PLUGIN_DST/"
+cp -a "$REPO/manifest.json" "$REPO/ContextService.qml" "$REPO/ContextBarWidget.qml" "$REPO/ContextMenuPanel.qml" "$REPO/ContextModel.js" "$REPO/skills" "$PLUGIN_DST/"
 echo "Installed plugin to $PLUGIN_DST"
+
+# 1b. Agent skill: expose the plugin's SKILL.md to agents via a symlink in the
+#     skill tree (enable/disable manages the link; setup self-heals it).
+echo "--- Agent skill ---"
+AGENTS_SKILLS="$HOME/.config/omarchy/agents/skills"
+mkdir -p "$AGENTS_SKILLS"
+ln -sfn "$PLUGIN_DST/skills/context-switcher" "$AGENTS_SKILLS/context-switcher"
+echo "Linked agent skill: $AGENTS_SKILLS/context-switcher"
 
 # 2. CLI + generator scripts -> ~/.local/bin/
 echo "--- CLI ---"

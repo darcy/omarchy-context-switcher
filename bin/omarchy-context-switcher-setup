@@ -66,7 +66,16 @@ LUA
   reload_binds=1
 fi
 
-# 4. Reload Hyprland when the bindings file/include changed so the keys load
+# 4. Agent skill: expose the plugin's SKILL.md to agents whenever the plugin
+#    is enabled (install.sh links it; this self-heals a removed link).
+AGENTS_SKILLS="$HOME/.config/omarchy/agents/skills"
+SKILL_SRC="$HOME/.config/omarchy/plugins/context-switcher/skills/context-switcher"
+if [[ -d "$SKILL_SRC" ]]; then
+  mkdir -p "$AGENTS_SKILLS"
+  ln -sfn "$SKILL_SRC" "$AGENTS_SKILLS/context-switcher"
+fi
+
+# 5. Reload Hyprland when the bindings file/include changed so the keys load
 #    without a compositor restart.
 if [[ "$reload_binds" == 1 ]]; then
   hyprctl reload >/dev/null 2>&1 || true

@@ -97,6 +97,7 @@ PY
 fi
 rm -f "$CTX_BINDINGS"
 rm -f "$MENU_EXT"
+rm -f "$HOME/.config/omarchy/agents/skills/context-switcher"
 
 echo "--- Reloading ---"
 hyprctl reload >/dev/null 2>&1 || true

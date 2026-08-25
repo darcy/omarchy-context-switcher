@@ -75,6 +75,7 @@ open(p, "w").write("\n".join(keep).rstrip() + "\n")
 PY
 fi
 rm -f "$CTX_BINDINGS" "$MENU_EXT"
+rm -f "$HOME/.config/omarchy/agents/skills/context-switcher"
 
 # 4. Reload so the restored bar + default view take effect.
 hyprctl reload >/dev/null 2>&1 || true
