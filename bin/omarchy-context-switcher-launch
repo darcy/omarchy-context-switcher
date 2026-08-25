@@ -1,8 +1,8 @@
 #!/bin/bash
-# omarchy-context-launch: open a URL (or just the browser) in the default
+# omarchy-context-switcher-launch: open a URL (or just the browser) in the default
 # Chromium-based browser using a specific profile directory.
 #
-# Usage: omarchy-context-launch <profile> [url]
+# Usage: omarchy-context-switcher-launch <profile> [url]
 #
 # With a url, launches the browser as a web app in that profile; without one,
 # opens the browser window in that profile. Passing an explicit profile (never

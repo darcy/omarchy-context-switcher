@@ -157,7 +157,7 @@ BarWidget {
       fixedHeight: root.barSize
       tooltipText: (root.vertical ? root.contextName + "\n" : "") + "Context (click: menu, right: next)"
       onPressed: function(b) {
-        if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-context next") }
+        if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-context-switcher next") }
         else if (root.bar) root.bar.run("omarchy menu summon contexts")
       }
     }
@@ -182,7 +182,7 @@ BarWidget {
         fixedWidth: root.vertical ? root.barSize : Style.space(20)
         fixedHeight: root.barSize
         tooltipText: isActive ? "Active" : (isOccupied ? "Occupied" : "Empty")
-        onPressed: function() { if (root.bar) root.bar.run("omarchy-context goto " + modelData) }
+        onPressed: function() { if (root.bar) root.bar.run("omarchy-context-switcher goto " + modelData) }
       }
     }
   }

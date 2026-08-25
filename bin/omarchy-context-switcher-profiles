@@ -1,5 +1,5 @@
 #!/bin/bash
-# omarchy-context-profiles: list the Chrome profile directories available in
+# omarchy-context-switcher-profiles: list the Chrome profile directories available in
 # the default Chromium-based browser. Emits one tab-delimited line per profile:
 #   <profile-dir>\t<display-name>
 # The profile dir (e.g. "Profile 1") is what you pass to --profile-directory;

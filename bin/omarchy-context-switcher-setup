@@ -1,5 +1,5 @@
 #!/bin/bash
-# omarchy-context-setup: enforce the Context Switcher bar state and generated
+# omarchy-context-switcher-setup: enforce the Context Switcher bar state and generated
 # files every time the service starts. Self-healing: after disable/re-enable,
 # a teardown, or an omarchy rewrite, this restores the workspace widget, the
 # Hyprland bindings file + include, and the launcher menu extension.
@@ -28,12 +28,12 @@ fi
 CFG_OK=""
 [[ -f "$HOME/.config/context-switcher/config.json" ]] && CFG_OK=1
 if [[ ! -s "$CTX_BINDINGS" && -n "$CFG_OK" ]]; then
-  if omarchy-context-generate --bindings > "$CTX_BINDINGS" 2>/dev/null; then
+  if omarchy-context-switcher-generate --bindings > "$CTX_BINDINGS" 2>/dev/null; then
     reload_binds=1
   fi
 fi
 if [[ ! -s "$MENU_EXT" && -n "$CFG_OK" ]]; then
-  omarchy-context-generate --menu > "$MENU_EXT" 2>/dev/null || true
+  omarchy-context-switcher-generate --menu > "$MENU_EXT" 2>/dev/null || true
 fi
 
 # 3. bindings.lua include (dropped by teardown or omarchy rewrites).

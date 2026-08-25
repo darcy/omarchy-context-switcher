@@ -1,12 +1,12 @@
 #!/bin/bash
-# omarchy-context-delete-context: remove a context from config.json without
+# omarchy-context-switcher-delete-context: remove a context from config.json without
 # orphaning workspaces. Every window sitting in the deleted context's
 # workspace range is moved into the target context (or, when none is given
 # or only one context remains, consolidated to a contiguous 1..N default set),
 # the context is removed from config, persisted state is cleaned, and the
 # Hyprland keybindings are regenerated.
 #
-# Usage: omarchy-context-delete-context <id> [target_id]
+# Usage: omarchy-context-switcher-delete-context <id> [target_id]
 set -euo pipefail
 
 id="${1:?Usage: $0 <id> [target_id]}"
@@ -107,5 +107,5 @@ if os.path.exists(STATE):
 PY
 
 # Deleting a context removes its shortcut binding; regenerate and reload.
-omarchy-context-generate --bindings > "$HOME/.config/hypr/context-bindings.lua"
+omarchy-context-switcher-generate --bindings > "$HOME/.config/hypr/context-bindings.lua"
 hyprctl reload >/dev/null 2>&1 || true

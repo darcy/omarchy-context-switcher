@@ -1,11 +1,11 @@
 #!/bin/bash
-# omarchy-context: drive the Context Switcher service via IPC.
+# omarchy-context-switcher: drive the Context Switcher service via IPC.
 # Thin wrapper over `omarchy-shell context <method> <args>`.
 set -euo pipefail
 
 usage() {
   cat <<EOF
-Usage: omarchy-context <command> [args]
+Usage: omarchy-context-switcher <command> [args]
 
 Commands:
   switch <context>      Switch to context, restoring last workspace
@@ -45,8 +45,8 @@ slugify() {
 
 cmd_create_context() {
   local name="${1:-}" shortcut="${2:-}" icon="${3:-✦}"
-  [[ -n "$name" ]] || { echo "Usage: omarchy-context create-context <name> <shortcut> [icon]" >&2; exit 1; }
-  [[ -n "$shortcut" ]] || { echo "Usage: omarchy-context create-context <name> <shortcut> [icon]" >&2; exit 1; }
+  [[ -n "$name" ]] || { echo "Usage: omarchy-context-switcher create-context <name> <shortcut> [icon]" >&2; exit 1; }
+  [[ -n "$shortcut" ]] || { echo "Usage: omarchy-context-switcher create-context <name> <shortcut> [icon]" >&2; exit 1; }
   [[ -f "$CONFIG_FILE" ]] || { echo "error: $CONFIG_FILE not found" >&2; exit 1; }
   local slug
   slug=$(slugify "$name")
@@ -59,12 +59,12 @@ cmd_create_context() {
     '.contexts += [{id: $id, name: $name, shortcut: $shortcut, icon: $icon, menu: []}]' "$CONFIG_FILE" > "$tmp"
   mv "$tmp" "$CONFIG_FILE"
   echo "Created context '$slug' ($name) with shortcut $shortcut"
-  echo "Run omarchy-context-generate and reload to apply bindings/menu."
+  echo "Run omarchy-context-switcher-generate and reload to apply bindings/menu."
 }
 
 cmd_delete_context() {
   local id="${1:-}"
-  [[ -n "$id" ]] || { echo "Usage: omarchy-context delete-context <id>" >&2; exit 1; }
+  [[ -n "$id" ]] || { echo "Usage: omarchy-context-switcher delete-context <id>" >&2; exit 1; }
   [[ -f "$CONFIG_FILE" ]] || { echo "error: $CONFIG_FILE not found" >&2; exit 1; }
   local exists
   exists=$(jq --arg id "$id" '[.contexts[] | select(.id == $id)] | length' "$CONFIG_FILE")
@@ -74,7 +74,7 @@ cmd_delete_context() {
   jq --arg id "$id" 'del(.contexts[] | select(.id == $id))' "$CONFIG_FILE" > "$tmp"
   mv "$tmp" "$CONFIG_FILE"
   echo "Deleted context '$id'"
-  echo "Run omarchy-context-generate and reload to apply bindings/menu."
+  echo "Run omarchy-context-switcher-generate and reload to apply bindings/menu."
 }
 
 if (( $# < 1 )); then
@@ -100,7 +100,7 @@ case "$cmd" in
   menu)          if [[ -n "${1:-}" ]]; then omarchy menu summon "contexts.${1:-}"; else omarchy menu summon contexts; fi ;;
   edit)          if [[ "${1:-}" == "new" ]]; then omarchy-shell context edit editContextNew "" 0
                  else omarchy-shell context edit editContext "${1:-}" 0; fi ;;
-  edit-item)     if [[ -z "${2:-}" ]]; then echo "Usage: omarchy-context edit-item <ctx> add|<path>[.add]" >&2; exit 1; fi
+  edit-item)     if [[ -z "${2:-}" ]]; then echo "Usage: omarchy-context-switcher edit-item <ctx> add|<path>[.add]" >&2; exit 1; fi
                  omarchy-shell context edit editItem "${1:-}" "${2:-}" ;;
   reorder)       omarchy-shell context edit reorder "${1:-}" "${2:-}" ;;
   edit-json)     alacritty --title 'context-switcher config' -e nvim ~/.config/context-switcher/config.json ;;

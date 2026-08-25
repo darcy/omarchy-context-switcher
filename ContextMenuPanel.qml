@@ -100,7 +100,7 @@ Panel {
 
   // Available Chrome profiles, loaded on demand into chromeProfileDropdown.
   function loadProfiles() {
-    profileProc.command = ["bash", "-lc", "omarchy-context-profiles 2>/dev/null"]
+    profileProc.command = ["bash", "-lc", "omarchy-context-switcher-profiles 2>/dev/null"]
     profileProc.running = true
   }
 
@@ -531,7 +531,7 @@ Panel {
 
   function ensureIconDb(refresh) {
     if (refresh || root.iconDb.length === 0) {
-      iconProc.command = ["bash", "-lc", "omarchy-context-icons" + (refresh ? " --refresh" : "") + " 2>/dev/null"]
+      iconProc.command = ["bash", "-lc", "omarchy-context-switcher-icons" + (refresh ? " --refresh" : "") + " 2>/dev/null"]
       iconProc.running = true
     }
   }
@@ -788,7 +788,7 @@ Panel {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "omarchy-context-menu"
+    WlrLayershell.namespace: "omarchy-context-switcher-menu"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore

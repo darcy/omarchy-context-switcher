@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# omarchy-context-icons: fetch the Nerd Fonts cheat-sheet glyph map and cache
+# omarchy-context-switcher-icons: fetch the Nerd Fonts cheat-sheet glyph map and cache
 # it as compact JSON for the icon picker (panel).
 #
-#   omarchy-context-icons           ensure the cache exists (downloads if missing)
-#   omarchy-context-icons --refresh force a redownload
+#   omarchy-context-switcher-icons           ensure the cache exists (downloads if missing)
+#   omarchy-context-switcher-icons --refresh force a redownload
 #
 # Prints the cache path on success, or "error: <reason>" on failure (the panel
 # shows the error and offers Retry).
@@ -24,7 +24,7 @@ def main() -> int:
         return 0
 
     try:
-        req = urllib.request.Request(URL, headers={"User-Agent": "omarchy-context-switcher"})
+        req = urllib.request.Request(URL, headers={"User-Agent": "omarchy-context-switcher-switcher"})
         html = urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace")
         start = html.find("const glyphs = {")
         if start < 0:

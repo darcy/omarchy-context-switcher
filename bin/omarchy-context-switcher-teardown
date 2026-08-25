@@ -1,5 +1,5 @@
 #!/bin/bash
-# omarchy-context-teardown: restore the default Omarchy workspace view after
+# omarchy-context-switcher-teardown: restore the default Omarchy workspace view after
 # the Context Switcher is disabled.
 #
 # 1. Restores omarchy.workspaces to the bar (replacing the context-switcher).

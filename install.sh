@@ -34,7 +34,7 @@ echo "Installed plugin to $PLUGIN_DST"
 
 # 2. CLI + generator scripts -> ~/.local/bin/
 echo "--- CLI ---"
-for f in omarchy-context omarchy-context-generate omarchy-context-move-workspace omarchy-context-delete-context omarchy-context-launch omarchy-context-profiles omarchy-context-disable omarchy-context-teardown omarchy-context-setup; do
+for f in omarchy-context-switcher omarchy-context-switcher-generate omarchy-context-switcher-move-workspace omarchy-context-switcher-delete-context omarchy-context-switcher-launch omarchy-context-switcher-profiles omarchy-context-switcher-disable omarchy-context-switcher-teardown omarchy-context-switcher-setup; do
   if [[ -f "$BIN_DIR/$f" ]]; then cp -a "$BIN_DIR/$f" "$BACKUP_DIR/" 2>/dev/null || true; fi
   cp "$REPO/bin/$f" "$BIN_DIR/$f"
   chmod +x "$BIN_DIR/$f"
@@ -61,7 +61,7 @@ JSON
 fi
   # 4. Generated keybindings -> ~/.config/hypr/context-bindings.lua
   echo "--- Keybindings ---"
-  "$BIN_DIR/omarchy-context-generate" --bindings > "$HYPRE_DIR/context-bindings.lua"
+  "$BIN_DIR/omarchy-context-switcher-generate" --bindings > "$HYPRE_DIR/context-bindings.lua"
   echo "Wrote $HYPRE_DIR/context-bindings.lua"
 
   # Ensure bindings.lua sources it.
@@ -83,7 +83,7 @@ LUA
   #    inside it summon the editor.
   echo "--- Menu extension ---"
   mkdir -p "$HOME/.config/omarchy/extensions"
-  "$BIN_DIR/omarchy-context-generate" --menu > "$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+  "$BIN_DIR/omarchy-context-switcher-generate" --menu > "$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
   echo "Wrote menu extension"
   omarchy menu refresh >/dev/null 2>&1 || true
 

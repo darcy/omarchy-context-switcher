@@ -9,7 +9,7 @@ import "ContextModel.js" as Model
 //
 // Owns per-monitor workspace-context state and implements the slot/context
 // switching commands. Exposes them over IPC (target "context") so the
-// omarchy-context CLI and keybindings can drive it, and keeps the bar-widget
+// omarchy-context-switcher CLI and keybindings can drive it, and keeps the bar-widget
 // in sync by emitting `stateUpdated` and `refreshRequested`.
 Item {
   id: root
@@ -62,7 +62,7 @@ Item {
       // generated files.
       if (!root.configBootstrapDone) {
         root.configBootstrapDone = true
-        initProc.command = ["bash", "-lc", "omarchy-context-init >/dev/null 2>&1"]
+        initProc.command = ["bash", "-lc", "omarchy-context-switcher-init >/dev/null 2>&1"]
         initProc.running = true
       }
       return
@@ -340,7 +340,7 @@ Item {
     var source = Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : 0
     if (source > 0 && source !== targetWs) {
       var p = dispatchProc
-      p.command = ["bash", "-lc", "omarchy-context-move-workspace " + source + " " + targetWs]
+      p.command = ["bash", "-lc", "omarchy-context-switcher-move-workspace " + source + " " + targetWs]
       p.running = true
     }
 
@@ -561,7 +561,7 @@ Item {
 
   function deleteContext(id, targetId) {
     if (!Model.contextExists(root.config, id)) { root.lastError = "unknown context: " + id; return "unknown" }
-    var cmd = "omarchy-context-delete-context " + Util.shellQuote(id)
+    var cmd = "omarchy-context-switcher-delete-context " + Util.shellQuote(id)
     if (targetId && targetId !== id) cmd += " " + Util.shellQuote(targetId)
     deleteProc.command = ["bash", "-lc", cmd]
     deleteProc.running = true
@@ -640,11 +640,11 @@ Item {
   function regenerateBindings() {
     var p = dispatchProc
     p.command = ["bash", "-lc",
-      "omarchy-context-generate --bindings > \"$HOME/.config/hypr/context-bindings.lua\"\n" +
+      "omarchy-context-switcher-generate --bindings > \"$HOME/.config/hypr/context-bindings.lua\"\n" +
       "for i in $(seq 1 25); do\n" +
       "  hyprctl reload >/dev/null 2>&1\n" +
       "  sleep 0.1\n" +
-      "  if hyprctl binds 2>/dev/null | grep -q 'omarchy-context menu'; then exit 0; fi\n" +
+      "  if hyprctl binds 2>/dev/null | grep -q 'omarchy-context-switcher menu'; then exit 0; fi\n" +
       "done\nexit 1"]
     p.running = true
   }
@@ -671,7 +671,7 @@ Item {
     var ext = "\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\""
     var tmp = "\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc.tmp\""
     p.command = ["bash", "-lc",
-      "omarchy-context-generate --menu --context " + Util.shellQuote(root.currentContextId) + " > " + tmp + " && " +
+      "omarchy-context-switcher-generate --menu --context " + Util.shellQuote(root.currentContextId) + " > " + tmp + " && " +
       "mv " + tmp + " " + ext + " && " +
       "omarchy menu refresh >/dev/null 2>&1"]
     p.running = true
@@ -929,7 +929,7 @@ Item {
     // makes enabling via any path (install.sh or omarchy plugin enable) behave
     // identically. execDetached is a Quickshell singleton spawn that survives
     // teardown, matching the disable path.
-    Quickshell.execDetached(["bash", "-lc", "omarchy-context-setup >/dev/null 2>&1"])
+    Quickshell.execDetached(["bash", "-lc", "omarchy-context-switcher-setup >/dev/null 2>&1"])
   }
 
   // On destruction (plugin disabled, or shell reload), run the teardown via a
@@ -941,14 +941,14 @@ Item {
   // (context-switcher gone from the bar layout), and exits immediately on a
   // mere shell reload (where the entry is still present).
   Component.onDestruction: {
-    Quickshell.execDetached(["bash", "-lc", "omarchy-context-teardown >/dev/null 2>&1"])
+    Quickshell.execDetached(["bash", "-lc", "omarchy-context-switcher-teardown >/dev/null 2>&1"])
   }
 
   IpcHandler {
     target: "context"
 
     // Note: "switch" is a reserved word in JS/QML, so the IPC method is
-    // switchTo; the omarchy-context CLI maps `switch` -> `switchTo`.
+    // switchTo; the omarchy-context-switcher CLI maps `switch` -> `switchTo`.
     function switchTo(contextId: string): string { return root.switchContext(contextId) }
     function goto(slot: string): string { return root.gotoSlot(slot) }
     function move(slot: string): string { return root.moveWindow(slot, false) }

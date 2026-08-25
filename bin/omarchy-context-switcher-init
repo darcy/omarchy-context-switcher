@@ -1,5 +1,5 @@
 #!/bin/bash
-# omarchy-context-init: create the default Context Switcher config on first
+# omarchy-context-switcher-init: create the default Context Switcher config on first
 # run when none exists. Personal is context 0 (workspaces 1..N), so any
 # existing workspaces land in Personal; Work follows in the next block.
 set -euo pipefail

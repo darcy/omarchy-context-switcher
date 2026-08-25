@@ -1,5 +1,5 @@
 #!/bin/bash
-# omarchy-context-disable: turn the Context Switcher OFF and restore the
+# omarchy-context-switcher-disable: turn the Context Switcher OFF and restore the
 # default Omarchy workspace view.
 #
 # What this does:
@@ -92,4 +92,4 @@ omarchy-restart-shell >/dev/null 2>&1 || true
 
 echo ""
 echo "Done. Default workspace view restored. context-switcher is disabled."
-echo "To re-enable: run omarchy-context install.sh"
+echo "To re-enable: run omarchy-context-switcher install.sh"

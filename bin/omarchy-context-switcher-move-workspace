@@ -1,8 +1,8 @@
 #!/bin/bash
-# omarchy-context-move-workspace: move every window in workspace <source> to
+# omarchy-context-switcher-move-workspace: move every window in workspace <source> to
 # workspace <target>, then focus <target>. Uses the Hyprland 0.56 Lua
 # dispatcher form via `hyprctl eval`.
-# Usage: omarchy-context-move-workspace <source_ws> <target_ws>
+# Usage: omarchy-context-switcher-move-workspace <source_ws> <target_ws>
 set -euo pipefail
 
 source_ws="${1:?Usage: $0 <source_ws> <target_ws>}"
