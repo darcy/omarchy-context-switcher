@@ -94,11 +94,11 @@ glyph), and a `type`:
 
 ```json
 [
-  { "label": "Instagram", "type": "web", "url": "https://instagram.com" },
-  { "label": "Server", "type": "ssh", "host": "box.example.com", "command": "htop" },
-  { "label": "Weather", "type": "script", "command": "~/.local/bin/outside" },
-  { "label": "Financial", "type": "submenu",
-    "items": [ { "label": "Bank", "type": "web", "url": "https://bank.com" } ] }
+  { "label": "Instagram", "icon": "\uf16d", "type": "web", "url": "https://instagram.com" },
+  { "label": "Server", "icon": "\uf233", "type": "ssh", "host": "box.example.com", "command": "htop" },
+  { "label": "Weather", "icon": "\uf0c2", "type": "script", "command": "~/.local/bin/outside" },
+  { "label": "Financial", "icon": "\uf19c", "type": "submenu",
+    "items": [ { "label": "Bank", "icon": "\uf19c", "type": "web", "url": "https://bank.com" } ] }
 ]
 ```
 
