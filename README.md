@@ -79,14 +79,22 @@ prefer to hand-edit (or `omarchy-context edit-json` opens it for you).
   "slots": 10,
   "default_chrome_profile": "Default",
   "contexts": [
-    { "id": "personal", "name": "Personal", "icon": "…", "shortcut": "P", "menu": [] },
-    { "id": "work",     "name": "Work",     "icon": "…", "shortcut": "W", "menu": [] }
+    { "id": "personal", "name": "Personal", "icon": "\uf007", "shortcut": "P",
+      "menu": [
+        { "label": "Email",     "icon": "\uf0e0", "type": "web",  "url": "https://mail.example.com" },
+        { "label": "Home server","icon": "\uf233", "type": "ssh", "host": "home.example.com" },
+        { "label": "Notes",     "icon": "\uf044", "type": "script", "command": "nvim ~/notes" }
+      ]
+    },
+    { "id": "work", "name": "Work", "icon": "\uf0b1", "shortcut": "W", "menu": [] }
   ]
 }
 ```
 
 Each context has a name, a one-letter shortcut, an optional Chrome profile,
-and a `menu` of launch items.
+and a `menu` of launch items. Each item has a `label`, a Nerd Font `icon`,
+and a `type` — `web` (url), `browser`, `ssh`/`mosh` (host), `terminal`/`script`
+(command) — plus the fields that type needs.
 
 > **Your config is never overwritten.** The plugin only creates
 > `~/.config/context-switcher/config.json` on first run when it doesn't exist;
