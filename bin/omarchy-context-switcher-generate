@@ -132,9 +132,9 @@ def emit_edit($cid; $base; $path; $label; $items; $detailsAction):
         elif ($e.value.type // "") == "web" then
           .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰅂"), label: $e.value.label, action: ("omarchy-context-switcher-launch " + ($profile | @json) + " " + ($e.value.url | @json)) }
         elif ($e.value.type // "") == "mosh" then
-          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰒵"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e mosh " + ($e.value.host | @json)) }
+          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰒵"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e mosh " + (($e.value.herdr // $e.value.host) | @json)) }
         elif ($e.value.type // "") == "ssh" then
-          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰒵"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e ssh " + ($e.value.host | @json)) }
+          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰒵"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e ssh " + (($e.value.herdr // $e.value.host) | @json)) }
         elif ($e.value.type // "") == "terminal" then
           .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰆍"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e sh -c " + ($e.value.command | @json)) }
         else

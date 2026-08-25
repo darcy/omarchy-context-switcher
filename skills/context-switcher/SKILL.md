@@ -87,10 +87,22 @@ glyph), and a `type`:
 | Type | Extra fields | Runs as |
 |------|--------------|---------|
 | `web` | `url` | Chrome web app in the context's profile |
-| `mosh` / `ssh` | `host`, optional `command`, `workdir` | Remote shell in a new terminal |
+| `mosh` / `ssh` | `host`, optional `herdr`, `command`, `workdir` | Remote shell in a new terminal |
 | `terminal` | `command` | Command in a new terminal window |
 | `script` | `command` | Command run directly, no window |
 | `submenu` | `items` (nested items) | A folder in the menu; nests arbitrarily deep |
+
+**Remote (`mosh`/`ssh`) targets**: `host` may be a bare host or `user@host`
+(e.g. `"host": "darcy@box.example.com"`). A separate `herdr` field takes
+precedence when present — use it to keep the host and login separate:
+
+```json
+{ "label": "Zippy portal", "type": "mosh",
+  "host": "192.168.30.101", "herdr": "darcy@192.168.30.101",
+  "workdir": "~/Work/zippy-portal" }
+```
+
+Item examples:
 
 ```json
 [
