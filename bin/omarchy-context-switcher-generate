@@ -131,10 +131,19 @@ def emit_edit($cid; $base; $path; $label; $items; $detailsAction):
        | emit_items($cid; $sub; $p; $profile; ($e.value.items // [])))
         elif ($e.value.type // "") == "web" then
           .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰅂"), label: $e.value.label, action: ("omarchy-context-switcher-launch " + ($profile | @json) + " " + ($e.value.url | @json)) }
-        elif ($e.value.type // "") == "mosh" then
-          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰒵"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e mosh " + (($e.value.herdr // $e.value.host) | @json)) }
-        elif ($e.value.type // "") == "ssh" then
-          .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰒵"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e ssh " + (($e.value.herdr // $e.value.host) | @json)) }
+        elif ($e.value.type // "") == "mosh" or ($e.value.type // "") == "ssh" then
+          # Remote command: "cd <workdir> && <command>"; workdir alone keeps an
+          # interactive shell in that dir (a bare "cd" would exit immediately).
+          ((((if ($e.value.command // "") != "" then
+            ([(if ($e.value.workdir // "") != "" then ("cd " + $e.value.workdir) else empty end), $e.value.command] | join(" && "))
+           elif ($e.value.workdir // "") != "" then ("cd " + $e.value.workdir + " && exec bash")
+           else "" end))) as $rc |
+           .[($base + "." + $e.value.label)] =
+             { icon: ($e.value.icon // "󰒵"), label: $e.value.label,
+               action: ("alacritty --title " + ($e.value.label | @json) +
+                        (if ($e.value.type) == "mosh" then " -e mosh " else " -e ssh " end) +
+                        (($e.value.herdr // $e.value.host) | @json) +
+                        (if $rc == "" then "" else (" " + ($rc | @json)) end)) })
         elif ($e.value.type // "") == "terminal" then
           .[($base + "." + $e.value.label)] = { icon: ($e.value.icon // "󰆍"), label: $e.value.label, action: ("alacritty --title " + ($e.value.label | @json) + " -e sh -c " + ($e.value.command | @json)) }
         else

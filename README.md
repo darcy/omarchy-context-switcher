@@ -96,15 +96,10 @@ and a `menu` of launch items. Each item has a `label`, a Nerd Font `icon`,
 and a `type` — `web` (url), `browser`, `ssh`/`mosh` (host), `terminal`/`script`
 (command) — plus the fields that type needs.
 
-**Remote items** (`mosh`/`ssh`) connect to `host`, which may be a bare host
-or `user@host`. If you keep the host and login separate, use `herdr` for the
-connection target — it takes precedence when present:
-
-```json
-{ "label": "Zippy portal", "type": "mosh",
-  "host": "192.168.30.101", "herdr": "darcy@192.168.30.101",
-  "workdir": "~/Work/zippy-portal" }
-```
+A remote `command` runs on connect, and `workdir` changes there first
+(`cd <workdir> && <command>`). A `workdir` with no `command` keeps an
+interactive shell in that directory (`&& exec bash`), so a bare connect
+lands you in the right folder.
 
 > **Your config is never overwritten.** The plugin only creates
 > `~/.config/context-switcher/config.json` on first run when it doesn't exist;

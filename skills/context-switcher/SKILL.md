@@ -94,7 +94,10 @@ glyph), and a `type`:
 
 **Remote (`mosh`/`ssh`) targets**: `host` may be a bare host or `user@host`
 (e.g. `"host": "darcy@box.example.com"`). A separate `herdr` field takes
-precedence when present — use it to keep the host and login separate:
+precedence when present — use it to keep the host and login separate. A
+`command` runs on connect (`mosh/ssh <target> "<command>"`); `workdir`
+changes there first (`cd <workdir> && <command>`), and a `workdir` with no
+command keeps an interactive shell in that directory (`&& exec bash`):
 
 ```json
 { "label": "Zippy portal", "type": "mosh",
