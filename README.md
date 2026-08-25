@@ -79,22 +79,106 @@ prefer to hand-edit (or `omarchy-context edit-json` opens it for you).
   "slots": 10,
   "default_chrome_profile": "Default",
   "contexts": [
-    { "id": "personal", "name": "Personal", "icon": "\uf007", "shortcut": "P",
+    {
+      "id": "personal",
+      "name": "Personal",
+      "icon": "",
+      "shortcut": "P",
       "menu": [
-        { "label": "Email",     "icon": "\uf0e0", "type": "web",  "url": "https://mail.example.com" },
-        { "label": "Home server","icon": "\uf233", "type": "ssh", "host": "home.example.com" },
-        { "label": "Notes",     "icon": "\uf044", "type": "script", "command": "nvim ~/notes" }
+        {
+          "label": "Instagram",
+          "icon": "󰊻",
+          "type": "web",
+          "url": "https://instagram.com/"
+        },
+        {
+          "label": "Bank",
+          "icon": "󰊻",
+          "type": "web",
+          "url": "https://bank.com/"
+        },
+        {
+          "label": "Family Calendar",
+          "icon": "󰊻",
+          "type": "web",
+          "url": "https://calendar.com/"
+        }
       ]
     },
-    { "id": "work", "name": "Work", "icon": "\uf0b1", "shortcut": "W", "menu": [] }
+    {
+      "id": "work",
+      "name": "Work",
+      "icon": "",
+      "shortcut": "W",
+      "menu": [
+        {
+          "label": "Slack",
+          "icon": "",
+          "type": "web",
+          "url": "https://mywork.slack.com"
+        },
+        {
+          "label": "Asana",
+          "icon": "",
+          "type": "web",
+          "url": "https://app.asana.com/1/"
+        },
+        {
+          "label": "Teams",
+          "icon": "󰊻",
+          "type": "web",
+          "url": "https://teams.cloud.microsoft/"
+        },
+        {
+          "label": "AWS",
+          "icon": "",
+          "type": "web",
+          "url": "https://us-west-2.console.aws.amazon.com/console/home"
+        },
+        {
+          "label": "Figma",
+          "icon": "",
+          "type": "web",
+          "url": "https://www.figma.com/files/team/1"
+        },
+        {
+          "label": "Github - Project",
+          "icon": "",
+          "type": "web",
+          "url": "https://github.com/darcy/omarchy-context-switcher"
+        },
+        {
+          "label": "Datadog",
+          "icon": "",
+          "type": "web",
+          "url": "https://us1.datadoghq.com/dashboard/"
+        },
+        {
+          "label": "Mosh Dev",
+          "icon": "",
+          "type": "mosh",
+          "host": "192.168.1.101",
+          "herdr": "darcy@192.168.1.101",
+          "workdir": "~/Work/dev"
+        },
+        {
+          "label": "Mosh Sandbox",
+          "icon": "",
+          "type": "mosh",
+          "host": "192.168.1.102",
+          "herdr": "darcy@192.168.1.102",
+          "workdir": "~/Work/sandbox"
+        }
+      ]
+    }
   ]
 }
 ```
 
 Each context has a name, a one-letter shortcut, an optional Chrome profile,
 and a `menu` of launch items. Each item has a `label`, a Nerd Font `icon`,
-and a `type` — `web` (url), `browser`, `ssh`/`mosh` (host), `terminal`/`script`
-(command) — plus the fields that type needs.
+and a `type` — `web` (url), `mosh`/`ssh` (host), `terminal`/`script`
+(command), `submenu` (nested items) — plus the fields that type needs.
 
 A remote `command` runs on connect, and `workdir` changes there first
 (`cd <workdir> && <command>`). A `workdir` with no `command` keeps an
