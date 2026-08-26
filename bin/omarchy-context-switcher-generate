@@ -157,7 +157,7 @@ def emit_edit($cid; $base; $path; $label; $items; $detailsAction):
 
     def emit_context($ctx):
       ($ctx.id) as $cid
-      | ($ctx.icon // "󰯆") as $ic
+      | ($ctx.icon // "󰌨") as $ic
       | ($ctx.name // $cid) as $cn
       | ($ctx.menu // []) as $items
       | ($ctx.chrome_profile // "") as $explicit
@@ -177,7 +177,7 @@ def emit_edit($cid; $base; $path; $label; $items; $detailsAction):
       | emit_edit($cid; ("contexts." + $cid + ".menu"); ""; $cn; $items; ("omarchy-context-switcher edit " + $cid));
 
     reduce .contexts[] as $ctx ({}; . + (emit_context($ctx)))
-    | { contexts: { icon: "󰯆", label: "Contexts" } }
+    | { contexts: { icon: "󰌨", label: "Contexts" } }
     + .
     + { "contexts.~add": { icon: "", label: "Add context", action: "omarchy-context-switcher edit new" },
         "contexts.~json": { icon: "", label: "Edit Config", action: "omarchy-context-switcher edit-json" },
