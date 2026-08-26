@@ -189,6 +189,12 @@ lands you in the right folder.
 > `~/.config/context-switcher/config.json` on first run when it doesn't exist;
 > if you already have one (or have hand-edited it), it's left untouched and
 > your contexts and edits are preserved across updates.
+>
+> **The system menu is never clobbered either.** The plugin (re)generates only
+> its own `contexts*` routes in `~/.config/omarchy/extensions/omarchy-menu.jsonc`
+> and preserves every other key — anything you add to the menu extension
+> yourself survives regenerations, and disabling/removing the plugin strips
+> only the `contexts*` entries.
 
 ## Removal
 

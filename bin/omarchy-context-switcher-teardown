@@ -74,7 +74,19 @@ keep = [l for l in open(p).read().splitlines()
 open(p, "w").write("\n".join(keep).rstrip() + "\n")
 PY
 fi
-rm -f "$CTX_BINDINGS" "$MENU_EXT"
+# Menu extension: remove only the plugin's contexts* routes; any other user
+# menu content stays (never delete the system menu's user layer wholesale).
+if [[ -f "$MENU_EXT" ]]; then
+  out=$(omarchy-context-switcher-generate --strip-menu "$MENU_EXT" 2>/dev/null || true)
+  if [[ -n "$out" && "$out" != "{}" ]]; then
+    T=$(mktemp "$MENU_EXT.XXXXXX") || exit 1
+    printf '%s\n' "$out" > "$T" && chmod 0644 "$T" && mv "$T" "$MENU_EXT"
+    rm -f "$T"
+  else
+    rm -f "$MENU_EXT"
+  fi
+fi
+rm -f "$CTX_BINDINGS"
 rm -f "$HOME/.config/omarchy/agents/skills/context-switcher"
 
 # 4. Reload so the restored bar + default view take effect.

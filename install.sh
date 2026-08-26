@@ -88,10 +88,20 @@ LUA
 
   # 6. Menu extension -> ~/.config/omarchy/extensions/omarchy-menu.jsonc
   #    The launcher is the system menu (fast, searchable); management actions
-  #    inside it summon the editor.
+  #    inside it summon the editor. Merge-preserving: only the plugin's
+  #    contexts* routes are (re)written; any other user menu content survives.
   echo "--- Menu extension ---"
   mkdir -p "$HOME/.config/omarchy/extensions"
-  "$BIN_DIR/omarchy-context-switcher-generate" --menu > "$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+  MENU_EXT="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+  MENU_TMP=$(mktemp "$MENU_EXT.XXXXXX") || exit 1
+  trap 'rm -f "$MENU_TMP"' EXIT
+  if [[ -f "$MENU_EXT" ]]; then
+    "$BIN_DIR/omarchy-context-switcher-generate" --menu --merge "$MENU_EXT" > "$MENU_TMP"
+  else
+    "$BIN_DIR/omarchy-context-switcher-generate" --menu > "$MENU_TMP"
+  fi
+  chmod 0644 "$MENU_TMP" && mv "$MENU_TMP" "$MENU_EXT"
+  trap - EXIT
   echo "Wrote menu extension"
   omarchy menu refresh >/dev/null 2>&1 || true
 

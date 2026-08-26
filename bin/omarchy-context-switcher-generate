@@ -21,16 +21,21 @@ CONFIG=$(timeout 5 cat "$CONFIG_FILE")
 [[ -n "$CONFIG" ]] || { echo "error: empty config" >&2; exit 1; }
 
 current=""
- while (( $# )); do
+mode=""
+merge=""
+strip=""
+while (( $# )); do
   case "$1" in
     --bindings) mode=bindings ;;
     --menu) mode=menu ;;
     --context) current="${2:-}"; shift ;;
+    --merge) merge="${2:-}"; shift ;;
+    --strip-menu) strip="${2:-}"; shift ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
   shift
- done
-[[ -n "$mode" ]] || { echo "usage: $0 --bindings|--menu [--context <id>]" >&2; exit 1; }
+done
+[[ -n "$mode" || -n "$strip" ]] || { echo "usage: $0 --bindings|--menu [--context <id>] [--merge <menu-ext>] | --strip-menu <menu-ext>" >&2; exit 1; }
 
 gen_bindings() {
   cat <<'LUA'
@@ -179,8 +184,31 @@ def emit_edit($cid; $base; $path; $label; $items; $detailsAction):
         "contexts.~reload": { icon: "", label: "Reload config", action: "omarchy-context-switcher reload" } }' 2>&1
 }
 
+if [[ -n "$strip" ]]; then
+  # Strip this plugin's contexts* routes from an existing menu extension,
+  # preserving every other (user) key — used by disable/teardown so the
+  # Omarchy system menu's user layer is never destroyed wholesale.
+  jq -n --argjson m "$(cat "$strip" 2>/dev/null || echo '{}')" '
+    reduce ($m | to_entries[]) as $e ({}; if ($e.key | startswith("contexts")) then . else .[$e.key] = $e.value end)'
+  exit 0
+fi
+
 if [[ "$mode" == "bindings" ]]; then
   gen_bindings
 else
-  gen_menu
+  tmp_fresh=$(mktemp "${TMPDIR:-/tmp}/ctx-menu.XXXXXX") || exit 1
+  trap 'rm -f "$tmp_fresh"' EXIT
+  gen_menu > "$tmp_fresh"
+  if [[ -n "$merge" && -s "$merge" ]]; then
+    # Merge-preserving regeneration: keep every key of the existing menu
+    # extension EXCEPT the contexts* routes this plugin owns, then layer the
+    # fresh ones on top — the user's own system-menu entries survive every
+    # regeneration (later entries override per-key, like the menu plugin's
+    # own defaults+user merge).
+    jq -n --argjson keep "$(cat "$merge")" --argjson add "$(cat "$tmp_fresh")" '
+      (reduce ($keep | to_entries[]) as $e
+        ({}; if ($e.key | startswith("contexts")) then . else .[$e.key] = $e.value end)) + $add'
+  else
+    cat "$tmp_fresh"
+  fi
 fi

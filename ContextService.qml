@@ -714,7 +714,7 @@ Item {
       "EXT=\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\"\n" +
       "T=$(mktemp \"$EXT.XXXXXX\") || exit 1\n" +
       "trap 'rm -f \"$T\"' EXIT\n" +
-      "omarchy-context-switcher-generate --menu --context " + Util.shellQuote(root.currentContextId) + " > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" \"$EXT\" && " +
+      "omarchy-context-switcher-generate --menu --context " + Util.shellQuote(root.currentContextId) + " --merge \"$EXT\" > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" \"$EXT\" && " +
       "omarchy menu refresh >/dev/null 2>&1"]
     p.running = true
   }
