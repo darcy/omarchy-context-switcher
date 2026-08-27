@@ -66,13 +66,14 @@ LUA
   reload_binds=1
 fi
 
-# 4. Agent skill: expose the plugin's SKILL.md to agents whenever the plugin
-#    is enabled (install.sh links it; this self-heals a removed link).
-AGENTS_SKILLS="$HOME/.config/omarchy/agents/skills"
+# 4. Agent skill: expose the plugin's SKILL.md to every harness the same way
+#    Omarchy links its own skills (install.sh links them; this self-heals).
 SKILL_SRC="$HOME/.config/omarchy/plugins/context-switcher/skills/context-switcher"
 if [[ -d "$SKILL_SRC" ]]; then
-  mkdir -p "$AGENTS_SKILLS"
-  ln -sfn "$SKILL_SRC" "$AGENTS_SKILLS/context-switcher"
+  for d in "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills"; do
+    mkdir -p "$d"
+    ln -sfn "$SKILL_SRC" "$d/context-switcher"
+  done
 fi
 
 # 5. Reload Hyprland when the bindings file/include changed so the keys load

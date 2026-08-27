@@ -32,13 +32,18 @@ mkdir -p "$PLUGIN_DST"
 cp -a "$REPO/manifest.json" "$REPO/ContextService.qml" "$REPO/ContextBarWidget.qml" "$REPO/ContextMenuPanel.qml" "$REPO/ContextModel.js" "$REPO/skills" "$PLUGIN_DST/"
 echo "Installed plugin to $PLUGIN_DST"
 
-# 1b. Agent skill: expose the plugin's SKILL.md to agents via a symlink in the
-#     skill tree (enable/disable manages the link; setup self-heals it).
+# 1b. Agent skill: expose the plugin's SKILL.md to every harness the same way
+#     Omarchy links its own skills (enable/disable manages the links; setup
+#     self-heals them).
 echo "--- Agent skill ---"
-AGENTS_SKILLS="$HOME/.config/omarchy/agents/skills"
-mkdir -p "$AGENTS_SKILLS"
-ln -sfn "$PLUGIN_DST/skills/context-switcher" "$AGENTS_SKILLS/context-switcher"
-echo "Linked agent skill: $AGENTS_SKILLS/context-switcher"
+SKILL_SRC="$PLUGIN_DST/skills/context-switcher"
+if [[ -d "$SKILL_SRC" ]]; then
+  for d in ~/.agents/skills ~/.claude/skills ~/.codex/skills ~/.pi/agent/skills ~/.gemini/config/skills; do
+    mkdir -p "$d"
+    ln -sfn "$SKILL_SRC" "$d/context-switcher"
+  done
+  echo "Linked context-switcher skill into ~/.agents, ~/.claude, ~/.codex, ~/.pi/agent, ~/.gemini"
+fi
 
 # 2. CLI + generator scripts -> ~/.local/bin/
 echo "--- CLI ---"

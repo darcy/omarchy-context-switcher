@@ -87,7 +87,9 @@ if [[ -f "$MENU_EXT" ]]; then
   fi
 fi
 rm -f "$CTX_BINDINGS"
-rm -f "$HOME/.config/omarchy/agents/skills/context-switcher"
+for d in "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills"; do
+  rm -f "$d/context-switcher"
+done
 
 # 4. Reload so the restored bar + default view take effect.
 hyprctl reload >/dev/null 2>&1 || true

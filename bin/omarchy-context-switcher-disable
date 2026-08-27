@@ -108,7 +108,9 @@ if [[ -f "$MENU_EXT" ]]; then
     rm -f "$MENU_EXT"
   fi
 fi
-rm -f "$HOME/.config/omarchy/agents/skills/context-switcher"
+for d in "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills"; do
+  rm -f "$d/context-switcher"
+done
 
 echo "--- Reloading ---"
 hyprctl reload >/dev/null 2>&1 || true
