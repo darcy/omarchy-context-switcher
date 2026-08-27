@@ -34,6 +34,8 @@ Commands:
   delete-item <ctx> <title>        Delete an item from a context (top-level menu)
   validate              Validate config.json
   status                Print service status JSON
+  skill link|unlink|status  Opt-in: expose the bundled agent skill to Claude Code,
+                      Codex, Pi/Opencode and Gemini skill dirs (NOT installed by default)
 EOF
 }
 
@@ -82,6 +84,30 @@ case "$cmd" in
   delete-item)   omarchy-shell context deleteItem "${1:-}" "${2:-}" ;;
   validate)      omarchy-shell context validate ;;
   status)        omarchy-shell context status ;;
+  skill)
+    SKILL_SRC="$HOME/.config/omarchy/plugins/context-switcher/skills/context-switcher"
+    SKILL_DIRS=("$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills")
+    case "${1:-}" in
+      link)
+        [[ -d "$SKILL_SRC" ]] || { echo "error: plugin skill missing at $SKILL_SRC" >&2; exit 1; }
+        echo "Linking the context-switcher agent skill into coding-agent skill dirs."
+        echo "This makes agent instructions from this plugin auto-discoverable by"
+        echo "Claude Code, Codex, Pi/Opencode, and Gemini — an explicit trust"
+        echo "expansion. It is opt-in; nothing is linked on install."
+        for d in "${SKILL_DIRS[@]}"; do mkdir -p "$d"; ln -sfn "$SKILL_SRC" "$d/context-switcher"; done
+        echo "Linked. Remove with: omarchy-context-switcher skill unlink" ;;
+      unlink)
+        for d in "${SKILL_DIRS[@]}"; do
+          link="$d/context-switcher"
+          [[ -L "$link" && "$(readlink "$link")" == "$SKILL_SRC" ]] && rm -f "$link"
+        done
+        echo "Unlinked (the SKILL.md still ships with the plugin)" ;;
+      status)
+        for d in "${SKILL_DIRS[@]}"; do
+          if [[ -L "$d/context-switcher" ]]; then echo "linked   $d/context-switcher"; else echo "not set  $d/context-switcher"; fi
+        done ;;
+      *) echo "Usage: omarchy-context-switcher skill link|unlink|status" >&2; exit 1 ;;
+    esac ;;
   -h|--help|help) usage ;;
   *)
     echo "Unknown command: $cmd" >&2

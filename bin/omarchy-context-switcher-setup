@@ -66,15 +66,10 @@ LUA
   reload_binds=1
 fi
 
-# 4. Agent skill: expose the plugin's SKILL.md to every harness the same way
-#    Omarchy links its own skills (install.sh links them; this self-heals).
-SKILL_SRC="$HOME/.config/omarchy/plugins/context-switcher/skills/context-switcher"
-if [[ -d "$SKILL_SRC" ]]; then
-  for d in "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills"; do
-    mkdir -p "$d"
-    ln -sfn "$SKILL_SRC" "$d/context-switcher"
-  done
-fi
+# 4. Agent skill: not auto-linked into harness skill dirs — that would ship
+#    agent instructions into other tools' trust stores without explicit user
+#    consent. The SKILL.md lives with the plugin; expose it on purpose with
+#    `omarchy-context-switcher skill link` (remove with `skill unlink`).
 
 # 5. Reload Hyprland when the bindings file/include changed so the keys load
 #    without a compositor restart.

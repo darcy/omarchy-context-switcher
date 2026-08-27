@@ -108,8 +108,12 @@ if [[ -f "$MENU_EXT" ]]; then
     rm -f "$MENU_EXT"
   fi
 fi
+# Cleaning agent-skill links the user opted into (skill link): only remove
+# links that point at OUR skill dir — never touch anything else in those trees.
+SKILL_SRC="$HOME/.config/omarchy/plugins/context-switcher/skills/context-switcher"
 for d in "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills"; do
-  rm -f "$d/context-switcher"
+  link="$d/context-switcher"
+  [[ -L "$link" && "$(readlink "$link")" == "$SKILL_SRC" ]] && rm -f "$link"
 done
 
 echo "--- Reloading ---"

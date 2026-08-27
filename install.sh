@@ -32,18 +32,14 @@ mkdir -p "$PLUGIN_DST"
 cp -a "$REPO/manifest.json" "$REPO/ContextService.qml" "$REPO/ContextBarWidget.qml" "$REPO/ContextMenuPanel.qml" "$REPO/ContextModel.js" "$REPO/skills" "$PLUGIN_DST/"
 echo "Installed plugin to $PLUGIN_DST"
 
-# 1b. Agent skill: expose the plugin's SKILL.md to every harness the same way
-#     Omarchy links its own skills (enable/disable manages the links; setup
-#     self-heals them).
-echo "--- Agent skill ---"
-SKILL_SRC="$PLUGIN_DST/skills/context-switcher"
-if [[ -d "$SKILL_SRC" ]]; then
-  for d in ~/.agents/skills ~/.claude/skills ~/.codex/skills ~/.pi/agent/skills ~/.gemini/config/skills; do
-    mkdir -p "$d"
-    ln -sfn "$SKILL_SRC" "$d/context-switcher"
-  done
-  echo "Linked context-switcher skill into ~/.agents, ~/.claude, ~/.codex, ~/.pi/agent, ~/.gemini"
-fi
+echo "--- Agent skill (opt-in) ---"
+echo "The plugin bundles an agent skill (SKILL.md) for understanding/managing"
+echo "contexts. It is NOT installed into any agent's skill directories — that"
+echo "would push plugin instructions into other tools' trust stores without"
+echo "your explicit consent. If you want agents (Claude Code, Codex,"
+echo "Pi/Opencode, Gemini) to see it, run:"
+echo "    omarchy-context-switcher skill link"
+echo "and remove it later with: omarchy-context-switcher skill unlink"
 
 # 2. CLI + generator scripts -> ~/.local/bin/
 echo "--- CLI ---"
