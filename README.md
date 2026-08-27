@@ -211,10 +211,28 @@ omarchy plugin disable context-switcher
 omarchy plugin remove context-switcher
 ```
 
-Removal cleans up the generated `context-bindings.lua`, the "Contexts" menu
-extension, and the bar layout. It does **not** delete
-`~/.config/context-switcher/config.json` — delete that folder yourself if you
-want to remove your contexts too.
+## Agent skill (opt-in)
+
+The plugin bundles an agent skill — `SKILL.md`, a config-first guide for
+understanding and managing contexts — at
+`~/.config/omarchy/plugins/context-switcher/skills/context-switcher/`.
+
+It is **not** installed into any agent's skill directories by default:
+linking it would make plugin-authored instructions auto-discoverable by
+Claude Code, Codex, Pi/Opencode, and Gemini, which is an explicit trust
+expansion you should choose deliberately.
+
+```bash
+omarchy-context-switcher skill status   # where the skill is (not) linked
+omarchy-context-switcher skill link     # expose it to coding agents (opt-in)
+omarchy-context-switcher skill unlink   # remove those links again
+```
+
+`link` prints exactly what it is about to do before linking, and `unlink`
+only ever removes links that point at this plugin's own skill dir. Review
+`SKILL.md` first if you want to know what agents will load.
+
+## External dependencies
 
 ## External dependencies
 
