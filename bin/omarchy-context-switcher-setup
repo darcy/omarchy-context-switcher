@@ -38,6 +38,8 @@ if [[ ! -s "$CTX_BINDINGS" && -n "$CFG_OK" ]]; then
     reload_binds=1
   else
     rm -f "$T"
+    echo "WARNING: keybindings generation failed — config invalid?" >&2
+    echo "         check: jq empty \"$HOME/.config/context-switcher/config.json\"" >&2
   fi
 fi
 if [[ ! -s "$MENU_EXT" && -n "$CFG_OK" ]]; then
@@ -46,6 +48,7 @@ if [[ ! -s "$MENU_EXT" && -n "$CFG_OK" ]]; then
     :
   else
     rm -f "$T"
+    echo "WARNING: menu extension generation failed — config invalid?" >&2
   fi
 fi
 

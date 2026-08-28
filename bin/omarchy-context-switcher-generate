@@ -58,7 +58,9 @@ LUA
     (.default_chrome_profile // "Default") as $p |
     "-- Browser: force the " + $p + " Chrome profile (Omarchy opens the last-used profile).",
     "hl.unbind(\"SUPER + SHIFT + B\")",
-    "o.bind(\"SUPER + SHIFT + B\", \"Browser\", \"omarchy-context-switcher-launch \\\"" + $p + "\\\"\")"
+    # @sh quotes the profile shell-safely ('Default'), so the emitted Lua stays
+    # valid (raw double quotes would terminate the Lua string early).
+    "o.bind(\"SUPER + SHIFT + B\", \"Browser\", \"omarchy-context-switcher-launch " + ($p | @sh) + "\")"
   '
   echo
   # Slot keys: SUPER+1..0 goto, SUPER+SHIFT+1..0 move, SUPER+SHIFT+ALT+1..0 move-silent.
