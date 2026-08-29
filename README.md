@@ -1,6 +1,10 @@
 # omarchy-context-switcher
 
 ![Workspaces](img/work-workspace.png)
+
+Video: https://x.com/darcybrown/status/2093173484436218016
+
+
 ![Context menu](img/context-menu.png) 
 ![Work Menu](img/work-menu.png) 
 ![Edit Context](img/edit-context.png) 
