@@ -4,14 +4,6 @@
 
 Video: https://x.com/darcybrown/status/2093173484436218016
 
-
-![Context menu](img/context-menu.png) 
-![Work Menu](img/work-menu.png) 
-![Edit Context](img/edit-context.png) 
-![Add Webapp](img/add-webapp.png) 
-![Add Remote](img/add-remote.png) 
-![Add Terminal](img/add-terminal.png) 
-
 Group your workspaces into named **contexts** — Personal, Work, Gaming, Infra,
 whatever fits how you actually work — each with its own set of workspaces, its
 own browser profile, and its own one-click launch menu.
@@ -21,6 +13,13 @@ all your work windows, apps, and work browser profile are one key away. Switch
 back to **Personal** and your home workspaces, personal bookmarks, and default
 browser are waiting. You can create as many contexts as you want — a client,
 a hobby, a side project, a machine — and hop between them freely.
+
+![Context menu](img/context-menu.png) 
+![Work Menu](img/work-menu.png) 
+![Edit Context](img/edit-context.png) 
+![Add Webapp](img/add-webapp.png) 
+![Add Remote](img/add-remote.png) 
+![Add Terminal](img/add-terminal.png) 
 
 ## Why you'd want it
 
