@@ -158,7 +158,7 @@ BarWidget {
       tooltipText: (root.vertical ? root.contextName + "\n" : "") + "Context (click: menu, right: next)"
       onPressed: function(b) {
         if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-context-switcher next") }
-        else if (root.bar) root.bar.run("omarchy menu summon contexts")
+        else if (root.bar) root.bar.run("omarchy-context-switcher menu")
       }
     }
 

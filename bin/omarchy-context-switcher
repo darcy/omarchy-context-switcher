@@ -61,7 +61,7 @@ case "$cmd" in
   prev)          omarchy-shell context prev ;;
   current)       omarchy-shell context current ;;
   list)          omarchy-shell context list ;;
-  menu)          if [[ -n "${1:-}" ]]; then omarchy menu summon "contexts.${1:-}"; else omarchy menu summon contexts; fi ;;
+  menu)          omarchy-shell context openMenu "${1:-}" ;;
   edit)          if [[ "${1:-}" == "new" ]]; then omarchy-shell context edit editContextNew "" 0
                  else omarchy-shell context edit editContext "${1:-}" 0; fi ;;
   edit-item)     if [[ -z "${2:-}" ]]; then echo "Usage: omarchy-context-switcher edit-item <ctx> add|<path>[.add]" >&2; exit 1; fi
