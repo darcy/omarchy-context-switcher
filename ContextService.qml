@@ -180,7 +180,6 @@ Item {
       root.currentContextId = fallback
     }
     if (changed) root.stateUpdated()
-    if (root.currentContextId !== prevCtx) root.maybeRegenerateMenu()
   }
 
   // (Monitor change handling is wired via Hyprland singleton signals below —
@@ -743,6 +742,32 @@ Item {
     id: menuProc
   }
 
+  // Rebuild the system-menu extension for the focused monitor's current context
+  // (it hides "Go to <ctx>" / "Move to <ctx>" for that context), refresh the
+  // launcher, then summon the picker or a specific context's submenu — all in
+  // one bash chain so the freshly-written/refreshed menu is guaranteed present
+  // before it is summoned. Triggered from the `menu` keybinding, so the menu
+  // always reflects the monitor it is opened on; no regeneration on focus
+  // changes (that would run/file-write continuously across monitors).
+  function openMenu(contextId) {
+    var target = contextId
+      ? "contexts." + contextId
+      : "contexts"
+    summonProc.command = ["bash", "-lc",
+      "EXT=\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\"\n" +
+      "T=$(mktemp \"$EXT.XXXXXX\") || exit 1\n" +
+      "trap 'rm -f \"$T\"' EXIT\n" +
+      "omarchy-context-switcher-generate --menu --context " + Util.shellQuote(root.currentContextId) + " --merge \"$EXT\" > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" \"$EXT\" && " +
+      "omarchy menu refresh >/dev/null 2>&1 && " +
+      "omarchy menu summon " + target]
+    summonProc.running = true
+    return "ok"
+  }
+
+  Process {
+    id: summonProc
+  }
+
   // First-run config bootstrap: on success reload the config and regenerate
   // the bindings + menu that depend on it existing.
   Process {
@@ -933,7 +958,6 @@ Item {
   // re-derive focus + context, bumping bars when anything changed.
   function setMonitorWorkspace(monitor, wsId, focused) {
     if (!monitor) return
-    var prevCtx = root.currentContextId
     var map = Object.assign({}, root.monitorActiveWorkspace || {})
     map[monitor] = wsId
     if (focused) root.focusedMonitorName = monitor
@@ -954,7 +978,6 @@ Item {
       }
     }
     if (changed) root.stateUpdated()
-    if (root.currentContextId !== prevCtx) root.maybeRegenerateMenu()
   }
 
   Connections {
@@ -1021,6 +1044,7 @@ Item {
     function reorderItems(contextId: string, scope: string, menuJson: string): string { return root.reorderItems(contextId, scope || "", menuJson) }
     function moveItem(contextId: string, scope: string, sourceLabel: string, targetLabel: string, newLabel: string): string { return root.moveItemIntoSubmenu(contextId, scope, sourceLabel, targetLabel, newLabel) }
     function menu(contextId: string): string { return root.openPopup(contextId) }
+    function openMenu(contextId: string): string { return root.openMenu(contextId) }
     function popup(): string { return root.openPopup("") }
     function openPopup(contextId: string): string { return root.openPopup(contextId) }
     function togglePopup(): string { return root.togglePopup() }

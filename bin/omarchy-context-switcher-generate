@@ -10,7 +10,7 @@
 #                management actions (add/edit/modify) that open the editor.
 set -euo pipefail
 
-CONFIG_FILE="${HOME}/.config/context-switcher/config.json"
+CONFIG_FILE="${CONFIG_FILE:-${HOME}/.config/context-switcher/config.json}"
 [[ -f "$CONFIG_FILE" ]] || { echo "error: $CONFIG_FILE not found" >&2; exit 1; }
 SIZE=$(stat -c %s "$CONFIG_FILE" 2>/dev/null || echo 0)
 if [[ ! "$SIZE" =~ ^[0-9]+$ || "$SIZE" -gt 262144 ]]; then
@@ -31,10 +31,35 @@ while (( $# )); do
     --context) current="${2:-}"; shift ;;
     --merge) merge="${2:-}"; shift ;;
     --strip-menu) strip="${2:-}"; shift ;;
+    --selftest) mode=selftest ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
   shift
 done
+
+# One runnable check for the non-trivial bits: comment-stripping before jq and
+# the "Go to <ctx>" hiding. Fails loudly if the logic breaks.
+selftest() {
+  local f
+  f=$(mktemp) || exit 1
+  printf '{\n  // managed block\n  "hey-tui": {"label":"HEY"},\n}\n' > "$f"
+  local out
+  out=$(strip_comments "$f")
+  [[ "$out" == *'"hey-tui"'* ]] || { echo "selftest: comments not stripped"; rm -f "$f"; exit 1; }
+  [[ "$out" != *'//'* ]] || { echo "selftest: comment survived"; rm -f "$f"; exit 1; }
+  rm -f "$f"
+
+  # Reuse a temp config: hide "Go to <current>", show every other context.
+  local cf conf gen
+  cf=$(mktemp) || exit 1
+  conf='{"slots":10,"chromium_browser":"chromium","default_chrome_profile":"Default","contexts":[{"id":"a","name":"Alpha"},{"id":"b","name":"Bravo"},{"id":"c","name":"Charlie"}]}'
+  printf '%s' "$conf" > "$cf"
+  gen=$(CONFIG_FILE="$cf" $0 --menu --context b 2>&1) || { echo "selftest: menu gen failed"; rm -f "$cf"; exit 1; }
+  echo "$gen" | grep -q '"contexts.b.menu.!go-to"' && { echo "selftest: go-to not hidden for current"; rm -f "$cf"; exit 1; }
+  echo "$gen" | grep -q 'Go to Alpha' || { echo "selftest: go-to Alpha missing"; rm -f "$cf"; exit 1; }
+  rm -f "$cf"
+  echo "selftest: ok"
+}
 [[ -n "$mode" || -n "$strip" ]] || { echo "usage: $0 --bindings|--menu [--context <id>] [--merge <menu-ext>] | --strip-menu <menu-ext>" >&2; exit 1; }
 
 gen_bindings() {
@@ -98,6 +123,16 @@ hl.unbind("SUPER + backslash")
 o.bind("SUPER + backslash", "Move workspace to next monitor", "omarchy-context-switcher cycle-monitor next")
 o.bind("SUPER + SHIFT + backslash", "Move workspace to previous monitor", "omarchy-context-switcher cycle-monitor prev")
 LUA
+}
+
+# An existing omarchy-menu.jsonc may carry whole-line // comments (e.g. the
+# hey-tui managed block). jq --argjson rejects comments, so strip them before
+# feeding the extension back in for merge-preserving regeneration / strip.
+strip_comments() {
+  # Read the file, drop whole-line comment lines (optionally indented), pass
+  # everything else through unchanged. Missing file -> "{}" so the merge no-ops.
+  if [[ ! -r "${1:-}" ]]; then echo "{}"; return; fi
+  < "$1" jq -R -r 'select(test("^[[:space:]]*//") | not)'
 }
 
 # System-menu extension: a "Contexts" section. Each context is a submenu of
@@ -186,11 +221,15 @@ def emit_edit($cid; $base; $path; $label; $items; $detailsAction):
         "contexts.~reload": { icon: "", label: "Reload config", action: "omarchy-context-switcher reload" } }' 2>&1
 }
 
+if [[ "$mode" == "selftest" ]]; then selftest; exit 0; fi
+
 if [[ -n "$strip" ]]; then
   # Strip this plugin's contexts* routes from an existing menu extension,
   # preserving every other (user) key — used by disable/teardown so the
   # Omarchy system menu's user layer is never destroyed wholesale.
-  jq -n --argjson m "$(cat "$strip" 2>/dev/null || echo '{}')" '
+  # The extension is JSONC (whole-line // comments), so strip those before
+  # parsing into jq's --argjson.
+  jq -n --argjson m "$(strip_comments "$strip")" '
     reduce ($m | to_entries[]) as $e ({}; if ($e.key | startswith("contexts")) then . else .[$e.key] = $e.value end)'
   exit 0
 fi
@@ -207,7 +246,7 @@ else
     # fresh ones on top — the user's own system-menu entries survive every
     # regeneration (later entries override per-key, like the menu plugin's
     # own defaults+user merge).
-    jq -n --argjson keep "$(cat "$merge")" --argjson add "$(cat "$tmp_fresh")" '
+    jq -n --argjson keep "$(strip_comments "$merge")" --argjson add "$(cat "$tmp_fresh")" '
       (reduce ($keep | to_entries[]) as $e
         ({}; if ($e.key | startswith("contexts")) then . else .[$e.key] = $e.value end)) + $add'
   else
