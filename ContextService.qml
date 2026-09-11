@@ -750,16 +750,23 @@ Item {
   // always reflects the monitor it is opened on; no regeneration on focus
   // changes (that would run/file-write continuously across monitors).
   function openMenu(contextId) {
-    var target = contextId
-      ? "contexts." + contextId
-      : "contexts"
+    var target = ""
+    if (contextId) {
+      if (!Model.contextExists(root.config, contextId)) {
+        root.lastError = "unknown context: " + contextId
+        return "unknown"
+      }
+      target = "contexts." + contextId
+    } else {
+      target = "contexts"
+    }
     summonProc.command = ["bash", "-lc",
       "EXT=\"$HOME/.config/omarchy/extensions/omarchy-menu.jsonc\"\n" +
       "T=$(mktemp \"$EXT.XXXXXX\") || exit 1\n" +
       "trap 'rm -f \"$T\"' EXIT\n" +
       "omarchy-context-switcher-generate --menu --context " + Util.shellQuote(root.currentContextId) + " --merge \"$EXT\" > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" \"$EXT\" && " +
       "omarchy menu refresh >/dev/null 2>&1 && " +
-      "omarchy menu summon " + target]
+      "omarchy menu summon " + Util.shellQuote(target)]
     summonProc.running = true
     return "ok"
   }
