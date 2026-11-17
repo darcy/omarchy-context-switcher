@@ -36,20 +36,6 @@ a hobby, a side project, a machine — and hop between them freely.
 - **Manage it without touching config files.** Add/edit/delete contexts and
   items, set profiles, and reorder launch items right from the menu.
 
-> **Known issue with Omarchy 4.5: per-monitor workspaces.** Omarchy 4.5 added
-> per-monitor workspace blocks (`eDP-1` → 1–10, the next monitor → 11–20, …) in
-> `default/hypr/monitor-workspaces.lua`. That manager renumbers workspaces on
-> `hyprctl reload` and on monitor plug/unplug, which collides with this plugin's
-> global workspace ranges (Personal 1–10, Zippy 11–20, …). The symptom is that
-> workspaces get merged into Personal — or occasionally Zippy — after a hotplug
-> or after enabling the plugin, and you have to move them back.
->
-> We're considering a fix that stands Omarchy's per-monitor workspace manager
-> down while context-switcher is enabled, and keys saved monitor state by
-> hardware identity rather than connector name. Until then, be aware that any
-> `hyprctl reload` or monitor change can renumber workspaces that are spread
-> across contexts.
-
 ## How it fits together
 
 - **Bar widget** — shows the active context name and its slot occupancy. Click
@@ -83,6 +69,10 @@ and places the widget on your bar.
 - `Super+1..0` — go to a workspace slot in the current context
 - `Super+Shift+1..0` — move the active window to a slot in current context
 - `Super+Tab` / `Super+Shift+Tab` — cycle workspaces in current context
+- `Super+Ctrl+Alt+Tab` / `Super+Ctrl+Alt+Shift+Tab` — next/previous context owned by this monitor
+- `Super+Shift+Ctrl+Alt+arrow` — move the active context to the monitor in that direction
+- `Super+Shift+Alt+arrow` — move the active workspace to that monitor's active context
+- `Super+Shift+Ctrl+arrow` — move the active window to that monitor's active context
 
 ### Configuration
 

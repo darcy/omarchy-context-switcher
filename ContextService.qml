@@ -36,6 +36,12 @@ Item {
   property var workspacesById: ({})
   // Authoritative monitor name -> active workspace id (from the hyprctl probe).
   property var monitorActiveWorkspace: ({})
+  // Connector name -> stable hardware identity (Hyprland monitor description).
+  property var monitorIdentities: ({})
+  property string focusedMonitorIdentity: ""
+  property bool migrationStarted: false
+  property bool needsReconcile: false
+  property bool startupReconciled: false
 
   // Emitted when context state changes so the bar-widget can re-render.
   signal stateUpdated()
@@ -109,6 +115,7 @@ Item {
       // context you are in); the first context-sync may run before the config
       // loads, so ensure a regeneration happens once it has.
       Qt.callLater(function() { root.maybeRegenerateMenu() })
+      Qt.callLater(function() { root.maybeMigrate() })
     } catch (e) {
       root.lastError = "config JSON parse failed: " + e
     }
@@ -116,9 +123,55 @@ Item {
 
   function applyState(raw) {
     var text = String(raw || "").trim()
-    if (!text) { root.state = Model.defaultState(); return }
-    try { root.state = JSON.parse(text) } catch (e) { root.state = Model.defaultState() }
+    var defaults = Model.defaultState()
+    if (!text) {
+      root.state = defaults
+    } else {
+      try {
+        root.state = Object.assign({}, defaults, JSON.parse(text))
+      } catch (e) {
+        root.state = defaults
+      }
+    }
     root.stateLoaded = true
+    root.cleanState()
+    Qt.callLater(function() { root.maybeMigrate() })
+  }
+
+  // Drop synthetic monitor keys persisted by older versions (a transient
+  // focused-monitor name, or Hyprland's synthetic FALLBACK output).
+  function cleanState() {
+    var mc = Object.assign({}, root.state.monitor_context || {})
+    var fake = ["default", "FALLBACK", ""]
+    var changed = false
+    for (var i = 0; i < fake.length; i++) {
+      if (mc[fake[i]] !== undefined) {
+        delete mc[fake[i]]
+        changed = true
+      }
+    }
+    if (changed) {
+      root.state = Object.assign({}, root.state, { monitor_context: mc })
+      root.persistState()
+    }
+  }
+
+  // Move connector-keyed contexts onto their stable hardware identity.
+  function migrateMonitorContextKeys() {
+    var mc = Object.assign({}, root.state.monitor_context || {})
+    var changed = false
+    for (var name in root.monitorIdentities) {
+      var identity = root.monitorIdentities[name]
+      if (identity && identity !== name && mc[name] !== undefined && mc[identity] === undefined) {
+        mc[identity] = mc[name]
+        delete mc[name]
+        changed = true
+      }
+    }
+    if (changed) {
+      root.state = Object.assign({}, root.state, { monitor_context: mc })
+      root.persistState()
+    }
   }
 
   // ---- Persist state ----
@@ -136,6 +189,535 @@ Item {
     stateWriter.running = true
   }
 
+  // ---- Context blocks ----
+  //
+  // Each monitor has a permanent default Omarchy block (its fallback
+  // workspace-manager). Each context is a virtual workspace-manager with its
+  // own block from 100+, owned by exactly one monitor. The QML service owns
+  // the map and writes blocks.lua for the Hyprland-side guard.
+
+  function monitorIdentityOrder() {
+    var mons = Hyprland.monitors ? Hyprland.monitors.values : []
+    var list = []
+    for (var i = 0; i < mons.length; i++) {
+      var m = mons[i]
+      if (!m) continue
+      var name = String(m.name || "")
+      if (!name || name === "FALLBACK") continue
+      list.push({ name: name, description: String(m.description || "") })
+    }
+    list.sort(function(a, b) {
+      var ai = /^(eDP|LVDS|DSI)/.test(a.name) ? 0 : 1
+      var bi = /^(eDP|LVDS|DSI)/.test(b.name) ? 0 : 1
+      if (ai !== bi) return ai - bi
+      return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)
+    })
+    var seen = {}
+    var out = []
+    for (var j = 0; j < list.length; j++) {
+      var base = list[j].description !== "" ? list[j].description : list[j].name
+      var identity = base
+      if (seen[identity]) identity = base + " #" + list[j].name
+      seen[identity] = true
+      out.push(identity)
+    }
+    return out
+  }
+
+  function monitorIdentityList() {
+    var mons = Hyprland.monitors ? Hyprland.monitors.values : []
+    var list = []
+    for (var i = 0; i < mons.length; i++) {
+      var m = mons[i]
+      if (!m) continue
+      var name = String(m.name || "")
+      if (!name || name === "FALLBACK") continue
+      list.push({ name: name, description: String(m.description || "") })
+    }
+    list.sort(function(a, b) {
+      var ai = /^(eDP|LVDS|DSI)/.test(a.name) ? 0 : 1
+      var bi = /^(eDP|LVDS|DSI)/.test(b.name) ? 0 : 1
+      if (ai !== bi) return ai - bi
+      return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)
+    })
+    var seen = {}
+    var identities = {}
+    for (var j = 0; j < list.length; j++) {
+      var base = list[j].description !== "" ? list[j].description : list[j].name
+      var identity = base
+      if (seen[identity]) identity = base + " #" + list[j].name
+      seen[identity] = true
+      identities[list[j].name] = identity
+    }
+    return identities
+  }
+
+  function identityForMonitor(name) {
+    var identities = root.monitorIdentityList()
+    return identities[name] || root.monitorIdentities[name] || name
+  }
+
+  function connectedMonitorIdentities() {
+    var identities = root.monitorIdentityList()
+    var values = []
+    for (var name in identities) {
+      var identity = identities[name]
+      if (values.indexOf(identity) === -1) values.push(identity)
+    }
+    return values
+  }
+
+  function firstMonitorIdentity() {
+    var order = root.monitorIdentityOrder()
+    return order.length > 0 ? order[0] : ""
+  }
+
+  function monitorNameForIdentity(identity) {
+    var identities = root.monitorIdentityList()
+    for (var name in identities) {
+      if (identities[name] === identity) return name
+    }
+    return ""
+  }
+
+  function isMonitorConnected(identity) {
+    return root.connectedMonitorIdentities().indexOf(identity) !== -1
+  }
+
+  function contextIds() {
+    var contexts = root.config.contexts || []
+    var ids = []
+    for (var i = 0; i < contexts.length; i++) ids.push(contexts[i].id)
+    return ids
+  }
+
+  function ownedContexts(identity) {
+    var owners = root.state.context_monitor || {}
+    var ids = root.contextIds()
+    var out = []
+    for (var i = 0; i < ids.length; i++) {
+      if (owners[ids[i]] === identity) out.push(ids[i])
+    }
+    return out
+  }
+
+  function bumpGeneration() {
+    root.state = Object.assign({}, root.state, {
+      generation: (Number(root.state.generation) || 0) + 1
+    })
+  }
+
+  function defaultBlockFor(identity) {
+    return Model.defaultBlock(root.state, identity)
+  }
+
+  function contextBlockFor(contextId) {
+    return Model.contextBlock(root.state, contextId)
+  }
+
+  function contextOwnerFor(contextId) {
+    return Model.contextOwner(root.state, contextId)
+  }
+
+  function activeManagerFor(identity) {
+    return Model.activeContext(root.state, identity) || "default"
+  }
+
+  function managerBlockFor(identity, manager) {
+    return Model.managerBlock(root.state, identity, manager)
+  }
+
+  function workspaceIdForManager(identity, manager, slot) {
+    return Model.workspaceIdForManager(root.state, identity, manager, root.config.slots || 10, slot)
+  }
+
+  function contextForWorkspaceId(wsId) {
+    var slots = root.config.slots || 10
+    var context = Model.contextForWorkspaceBlock(root.state, wsId, slots)
+    if (context) return context
+    return Model.contextForWorkspace(root.config, wsId)
+  }
+
+  function slotForWorkspaceId(wsId) {
+    return ((wsId - 1) % (root.config.slots || 10)) + 1
+  }
+
+  function managerForWorkspace(identity, wsId) {
+    return Model.managerForWorkspace(root.state, identity, wsId, root.config.slots || 10)
+  }
+
+  function findFirstEmptySlot(identity, manager) {
+    var slots = root.config.slots || 10
+    var block = root.managerBlockFor(identity, manager)
+    if (block === undefined) return 0
+    for (var slot = 1; slot <= slots; slot++) {
+      if (!root.workspacesById[String(Model.workspaceIdForBlock(block, slots, slot))]) return slot
+    }
+    return 0
+  }
+
+  function ensureContextBlocks() {
+    if (root.state.context_model !== 2) return false
+    var next = Model.allocateContextBlocks(root.state, root.contextIds(), 100)
+    var changed = (next !== root.state)
+    if (changed) {
+      root.state = next
+      root.bumpGeneration()
+      root.persistState()
+      root.writeBlocks()
+    }
+    return changed
+  }
+
+  function ensureContextOwners() {
+    if (root.state.context_model !== 2) return false
+    var owners = Object.assign({}, root.state.context_monitor || {})
+    var fallback = root.focusedMonitorIdentity || root.firstMonitorIdentity()
+    if (!fallback) return false
+    var changed = false
+    var ids = root.contextIds()
+    for (var i = 0; i < ids.length; i++) {
+      if (!owners[ids[i]]) {
+        owners[ids[i]] = fallback
+        changed = true
+      }
+    }
+    if (changed) {
+      root.state = Object.assign({}, root.state, { context_monitor: owners })
+      root.bumpGeneration()
+      root.persistState()
+      root.writeBlocks()
+    }
+    return changed
+  }
+
+  function loadDefaultBlocks() {
+    defaultBlocksProbe.command = ["bash", "-lc",
+      "F=\"$HOME/.local/state/omarchy/monitor-workspaces\"\n" +
+      "[[ -f \"$F\" ]] && cat \"$F\" || true"]
+    defaultBlocksProbe.running = true
+  }
+
+  function applyDefaultBlocks(raw) {
+    var text = String(raw || "").trim()
+    var blocks = {}
+    var lines = text.split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim()
+      if (!line) continue
+      var p = line.split("\t")
+      if (p.length < 3) continue
+      var block = Number(p[0])
+      var identity = p[2]
+      if (!isFinite(block) || !identity) continue
+      blocks[identity] = block
+    }
+    if (Object.keys(blocks).length === 0) return
+    if (JSON.stringify(blocks) === JSON.stringify(root.state.default_blocks || {})) return
+    root.state = Object.assign({}, root.state, { default_blocks: blocks })
+    root.persistState()
+    root.writeBlocks()
+    root.syncMonitors()
+  }
+
+  function luaString(value) {
+    return JSON.stringify(String(value))
+  }
+
+  function blocksLua() {
+    var slots = root.config.slots || 10
+    var contextBlocks = root.state.context_blocks || {}
+    var contextMonitor = root.state.context_monitor || {}
+    var defaultBlocks = root.state.default_blocks || {}
+    var active = root.state.monitor_context || {}
+    var lines = [
+      "return {",
+      "  generation = " + (Number(root.state.generation) || 0) + ",",
+      "  slots = " + slots + ",",
+      "  context_blocks = {"
+    ]
+    for (var context in contextBlocks) {
+      lines.push("    [" + root.luaString(context) + "] = " + Number(contextBlocks[context]) + ",")
+    }
+    lines.push("  },")
+    lines.push("  context_monitor = {")
+    for (var context in contextMonitor) {
+      lines.push("    [" + root.luaString(context) + "] = " + root.luaString(contextMonitor[context]) + ",")
+    }
+    lines.push("  },")
+    lines.push("  default_blocks = {")
+    for (var identity in defaultBlocks) {
+      lines.push("    [" + root.luaString(identity) + "] = " + Number(defaultBlocks[identity]) + ",")
+    }
+    lines.push("  },")
+    lines.push("  active = {")
+    for (var identity in active) {
+      if (active[identity]) lines.push("    [" + root.luaString(identity) + "] = " + root.luaString(active[identity]) + ",")
+    }
+    lines.push("  },")
+    lines.push("}")
+    return lines.join("\n") + "\n"
+  }
+
+  function writeBlocks() {
+    if (!root.stateLoaded) return
+    var path = root.stateDir + "/blocks.lua"
+    blocksWriter.command = ["bash", "-lc",
+      "mkdir -p " + Util.shellQuote(root.stateDir) + "\n" +
+      "T=$(mktemp " + Util.shellQuote(path + ".XXXXXX") + ") || exit 1\n" +
+      "trap 'rm -f \"$T\"' EXIT\n" +
+      "printf '%s' " + Util.shellQuote(root.blocksLua()) + " > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" " + Util.shellQuote(path)]
+    blocksWriter.running = true
+  }
+
+  function reconcileWorkspaces(force) {
+    var expr = force ? "o.workspaces.reconcile(\"force\")" : "o.workspaces.reconcile()"
+    workspaceProc.command = ["bash", "-lc",
+      "hyprctl eval '" + expr + "' >/dev/null 2>&1 || true"]
+    workspaceProc.running = true
+  }
+
+  function setActiveManager(identity, manager) {
+    if (!identity) return
+    if (manager === "default") {
+      var mc = Object.assign({}, root.state.monitor_context || {})
+      delete mc[identity]
+      root.state = Object.assign({}, root.state, { monitor_context: mc })
+    } else {
+      root.state = Model.setMonitorContext(root.state, identity, manager)
+    }
+  }
+
+  // A monitor may only be active in a context it owns. Guests are allowed only
+  // while the owner monitor is absent (hotplug); once the owner is connected,
+  // drop the guest active manager so the monitor falls back to its own context
+  // or its default manager.
+  function sanitizeActiveManagers() {
+    var mc = Object.assign({}, root.state.monitor_context || {})
+    var connected = root.connectedMonitorIdentities()
+    var changed = false
+    for (var identity in mc) {
+      var contextId = mc[identity]
+      var owner = root.contextOwnerFor(contextId)
+      if (owner && owner !== identity && connected.indexOf(owner) !== -1) {
+        delete mc[identity]
+        changed = true
+      }
+    }
+    if (changed) {
+      root.state = Object.assign({}, root.state, { monitor_context: mc })
+      root.persistState()
+      root.writeBlocks()
+    }
+  }
+
+  // Keep every monitor's active manager in sync with the workspace it is
+  // actually showing, not just the focused monitor.
+  function syncAllMonitors() {
+    var mc = Object.assign({}, root.state.monitor_context || {})
+    var changed = false
+    for (var name in root.monitorActiveWorkspace) {
+      var identity = root.identityForMonitor(name)
+      var wsId = Number(root.monitorActiveWorkspace[name]) || 0
+      if (wsId <= 0) continue
+      var info = root.managerForWorkspace(identity, wsId)
+      if (!info) continue
+      if (info.manager === "default") {
+        if (mc[identity] !== undefined) {
+          delete mc[identity]
+          changed = true
+        }
+      } else {
+        var owner = root.contextOwnerFor(info.manager)
+        if (!owner || owner === identity || !root.isMonitorConnected(owner)) {
+          if (mc[identity] !== info.manager) {
+            mc[identity] = info.manager
+            changed = true
+          }
+        }
+      }
+    }
+    if (changed) {
+      root.state = Object.assign({}, root.state, { monitor_context: mc })
+      root.persistState()
+      root.writeBlocks()
+    }
+  }
+
+  function monitorHostingContext(contextId) {
+    var block = root.contextBlockFor(contextId)
+    if (block === undefined) return ""
+    var slots = root.config.slots || 10
+    var values = Hyprland.workspaces.values
+    for (var i = 0; i < values.length; i++) {
+      var ws = values[i]
+      if (!ws || !ws.monitor) continue
+      var id = Number(ws.id)
+      if (id > 0 && Math.floor((id - 1) / slots) === block) {
+        return root.identityForMonitor(String(ws.monitor.name || ""))
+      }
+    }
+    return ""
+  }
+
+  function moveContextWorkspacesToMonitor(contextId, identity) {
+    var block = root.contextBlockFor(contextId)
+    var name = root.monitorNameForIdentity(identity)
+    if (block === undefined || !name) return
+    var slots = root.config.slots || 10
+    var cmd = ""
+    for (var slot = 1; slot <= slots; slot++) {
+      var ws = block * slots + slot
+      cmd += "hyprctl eval 'hl.dispatch(hl.dsp.workspace.move({ workspace = \"" + ws + "\", monitor = \"" + name + "\" }))' >/dev/null 2>&1 || true\n"
+    }
+    var p = dispatchProc
+    p.command = ["bash", "-lc", cmd]
+    p.running = true
+  }
+
+  function monitorInDirection(direction) {
+    var mons = Hyprland.monitors ? Hyprland.monitors.values : []
+    var focusedName = root.focusedMonitorName
+    var focused = null
+    for (var i = 0; i < mons.length; i++) {
+      if (String(mons[i].name || "") === focusedName) { focused = mons[i]; break }
+    }
+    if (!focused) return ""
+    var fx = Number(focused.x) + Number(focused.width) / 2
+    var fy = Number(focused.y) + Number(focused.height) / 2
+    var best = null
+    var bestDist = Infinity
+    for (var j = 0; j < mons.length; j++) {
+      var m = mons[j]
+      if (!m || String(m.name || "") === focusedName) continue
+      var cx = Number(m.x) + Number(m.width) / 2
+      var cy = Number(m.y) + Number(m.height) / 2
+      var dx = cx - fx
+      var dy = cy - fy
+      var ok = false
+      var dist = 0
+      if (direction === "left") { ok = dx < 0; dist = Math.abs(dx) }
+      else if (direction === "right") { ok = dx > 0; dist = Math.abs(dx) }
+      else if (direction === "up") { ok = dy < 0; dist = Math.abs(dy) }
+      else if (direction === "down") { ok = dy > 0; dist = Math.abs(dy) }
+      if (ok && dist < bestDist) { best = m; bestDist = dist }
+    }
+    return best ? String(best.name) : ""
+  }
+
+  function moveContext(direction) {
+    root.syncMonitors()
+    var sourceIdentity = root.focusedMonitorIdentity
+    var contextId = root.activeManagerFor(sourceIdentity)
+    if (contextId === "default") return "ok"
+
+    var targetName = ""
+    if (direction === "next" || direction === "prev") {
+      var order = root.connectedMonitorIdentities()
+      if (order.length <= 1) return "ok"
+      var idx = order.indexOf(sourceIdentity)
+      if (idx < 0) idx = 0
+      var nextIdx = direction === "prev" ? (idx - 1 + order.length) % order.length : (idx + 1) % order.length
+      targetName = root.monitorNameForIdentity(order[nextIdx])
+    } else {
+      targetName = root.monitorInDirection(direction)
+    }
+    if (!targetName) return "error"
+    var targetIdentity = root.identityForMonitor(targetName)
+    if (!targetIdentity || targetIdentity === sourceIdentity) return "ok"
+
+    root.moveContextWorkspacesToMonitor(contextId, targetIdentity)
+
+    var owners = Object.assign({}, root.state.context_monitor || {})
+    owners[contextId] = targetIdentity
+    var mc = Object.assign({}, root.state.monitor_context || {})
+    mc[targetIdentity] = contextId
+    delete mc[sourceIdentity]
+    root.state = Object.assign({}, root.state, { context_monitor: owners, monitor_context: mc })
+    root.bumpGeneration()
+
+    var fallback = root.ownedContexts(sourceIdentity)[0] || ""
+    if (fallback) root.state = Model.setMonitorContext(root.state, sourceIdentity, fallback)
+    root.persistState()
+    root.writeBlocks()
+
+    var last = root.state.last_workspace ? root.state.last_workspace[contextId] : 1
+    if (last === undefined || last === null) last = 1
+    var targetWs = root.workspaceIdForManager(targetIdentity, contextId, last)
+    var sourceHome = fallback
+      ? root.workspaceIdForManager(sourceIdentity, fallback, 1)
+      : root.workspaceIdForManager(sourceIdentity, "default", 1)
+    var sourceName = root.monitorNameForIdentity(sourceIdentity)
+    var cmd = ""
+    if (sourceHome !== undefined && sourceName) {
+      cmd += "hyprctl eval 'hl.dispatch(hl.dsp.focus({ monitor = \"" + sourceName + "\" }))'\n"
+      cmd += "hyprctl eval 'hl.dispatch(hl.dsp.focus({ workspace = \"" + sourceHome + "\" }))'\n"
+    }
+    if (targetWs !== undefined) {
+      cmd += "hyprctl eval 'hl.dispatch(hl.dsp.focus({ monitor = \"" + targetName + "\" }))'\n"
+      cmd += "hyprctl eval 'hl.dispatch(hl.dsp.focus({ workspace = \"" + targetWs + "\" }))'\n"
+    }
+    var p = dispatchProc
+    p.command = ["bash", "-lc", cmd]
+    p.running = true
+
+    Qt.callLater(function() {
+      root.syncMonitors()
+      root.state = Model.setMonitorContext(root.state, targetIdentity, contextId)
+      root.persistState()
+      root.writeBlocks()
+      root.reconcileWorkspaces()
+      root.stateUpdated()
+    })
+    return "ok"
+  }
+
+  function cycleContext(direction) {
+    root.syncMonitors()
+    var identity = root.focusedMonitorIdentity
+    var owned = root.ownedContexts(identity)
+    if (owned.length === 0) return "ok"
+    var current = root.activeManagerFor(identity)
+    var idx = owned.indexOf(current)
+    if (idx < 0) {
+      idx = direction === "prev" ? owned.length - 1 : 0
+    } else {
+      idx = direction === "prev" ? (idx - 1 + owned.length) % owned.length : (idx + 1) % owned.length
+    }
+    var target = owned[idx]
+    root.setActiveManager(identity, target)
+    root.persistState()
+    root.writeBlocks()
+
+    var last = root.state.last_workspace ? root.state.last_workspace[target] : 1
+    if (last === undefined || last === null) last = 1
+    var ws = root.workspaceIdForManager(identity, target, last)
+    if (ws === undefined) return "error"
+    root.focusWorkspace(ws)
+    Qt.callLater(function() {
+      root.syncMonitors()
+      root.state = Model.setMonitorContext(root.state, identity, target)
+      root.persistState()
+      root.writeBlocks()
+      root.stateUpdated()
+    })
+    return "ok"
+  }
+
+  function maybeMigrate() {
+    if (root.migrationStarted) return
+    if (!root.configLoaded || !root.stateLoaded) return
+    if (root.state.context_model === 2) {
+      root.ensureContextBlocks()
+      root.ensureContextOwners()
+      root.loadDefaultBlocks()
+      root.writeBlocks()
+      return
+    }
+    root.migrationStarted = true
+    migrateProc.command = ["bash", "-lc", "omarchy-context-switcher-migrate"]
+    migrateProc.running = true
+  }
   // ---- Current focused monitor + context ----
   //
   // Event-driven: rebuilt from the live Quickshell Hyprland.monitors model,
@@ -151,31 +733,55 @@ Item {
   // seed), falling back to the focusedWorkspace singleton only if the map has
   // no entry for the focused monitor. Does NOT rebuild the per-monitor map.
   function syncMonitors() {
-    var prevCtx = root.currentContextId
     var focusedName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
-    var nameChanged = (focusedName || "default") !== root.focusedMonitorName
-    root.focusedMonitorName = focusedName || "default"
+    var nameChanged = focusedName !== root.focusedMonitorName
+    if (focusedName) root.focusedMonitorName = focusedName
+
+    var identity = root.identityForMonitor(root.focusedMonitorName)
+    var identityChanged = identity !== root.focusedMonitorIdentity
+    root.focusedMonitorIdentity = identity
 
     // Authoritative: the focused monitor's active workspace from the event/seed
     // map. This is what the bar highlights, so goto/switch must agree with it.
     var map = root.monitorActiveWorkspace || {}
-    var activeWs = map[focusedName] ? Number(map[focusedName]) || 0 : 0
+    var activeWs = map[root.focusedMonitorName] ? Number(map[root.focusedMonitorName]) || 0 : 0
     if (!activeWs) {
       var fw = Hyprland.focusedWorkspace
       activeWs = fw ? Number(fw.id) || 0 : 0
     }
-    var derived = activeWs > 0 ? Model.contextForWorkspace(root.config, activeWs) : ""
-    var changed = nameChanged
-    if (derived) {
-      if (derived !== root.currentContextId) changed = true
-      root.currentContextId = derived
-      var existing = (root.state.monitor_context || {})[root.focusedMonitorName]
-      if (existing !== derived) {
-        root.state = Model.setMonitorContext(root.state, root.focusedMonitorName, derived)
-        root.persistState()
+
+    var info = activeWs > 0 ? root.managerForWorkspace(identity, activeWs) : null
+    if (info && info.manager !== "default") {
+      var owner = root.contextOwnerFor(info.manager)
+      if (owner && owner !== identity && root.isMonitorConnected(owner)) info = null
+    }
+    var changed = nameChanged || identityChanged
+
+    if (info) {
+      if (info.manager === "default") {
+        if ((root.state.monitor_context || {})[identity] !== undefined) {
+          var mc = Object.assign({}, root.state.monitor_context || {})
+          delete mc[identity]
+          root.state = Object.assign({}, root.state, { monitor_context: mc })
+          root.persistState()
+          root.writeBlocks()
+          changed = true
+        }
+        if (root.currentContextId !== "") changed = true
+        root.currentContextId = ""
+      } else {
+        if (info.manager !== root.currentContextId) changed = true
+        root.currentContextId = info.manager
+        var existing = (root.state.monitor_context || {})[identity]
+        if (existing !== info.manager) {
+          root.state = Model.setMonitorContext(root.state, identity, info.manager)
+          root.persistState()
+          root.writeBlocks()
+          changed = true
+        }
       }
     } else {
-      var fallback = Model.monitorContext(root.state, root.focusedMonitorName, root.defaultContextId)
+      var fallback = (root.state.monitor_context || {})[identity] || ""
       if (fallback !== root.currentContextId) changed = true
       root.currentContextId = fallback
     }
@@ -235,20 +841,18 @@ Item {
     runEval('hl.dsp.workspace.move({ workspace = "' + wsId + '", monitor = "' + monitor + '" })')
   }
 
-  // Cycle the active workspace to the next/prev monitor and focus it there.
-  // Context is context-aware: the target monitor takes the moved workspace's
-  // context, and every monitor's context is re-derived live.
+  // Move the active workspace to the next/prev monitor. The guard adopts it
+  // into that monitor's active manager (context or default), keeping its slot
+  // when free and otherwise taking the first free slot.
   function cycleMonitor(direction) {
     var mons = Hyprland.monitors ? Hyprland.monitors.values : []
     if (mons.length <= 1) return "ok"
     var wsId = Hyprland.focusedWorkspace ? Number(Hyprland.focusedWorkspace.id) : 0
     if (wsId <= 0) return "ok"
 
-    // Stable monitor order by id; find the one currently hosting the workspace.
     var sorted = mons.slice().sort(function(a, b) { return Number(a.id) - Number(b.id) })
     var names = []
-    var ids = []
-    for (var i = 0; i < sorted.length; i++) { names.push(String(sorted[i].name)); ids.push(String(sorted[i].id)) }
+    for (var i = 0; i < sorted.length; i++) names.push(String(sorted[i].name))
 
     var idx = -1
     for (i = 0; i < sorted.length; i++) {
@@ -257,26 +861,17 @@ Item {
     }
     if (idx < 0) {
       var focusedName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
-      for (i = 0; i < names.length; i++) { if (names[i] === focusedName) { idx = i; break } }
+      idx = names.indexOf(focusedName)
     }
     if (idx < 0) return "error"
 
-    var count = names.length
-    var nextIdx = direction === "prev" ? ((idx - 1 + count) % count) : ((idx + 1) % count)
+    var nextIdx = direction === "prev" ? (idx - 1 + names.length) % names.length : (idx + 1) % names.length
     var target = names[nextIdx]
-
-    // Move the workspace to the target monitor, then focus it there — chained
-    // in a single bash line so the focus happens only after the move lands
-    // (avoids the two async evals racing each other).
-    var moveEval = 'hl.dispatch(hl.dsp.workspace.move({ workspace = "' + wsId + '", monitor = "' + target + '" }))'
-    var focusEval = 'hl.dispatch(hl.dsp.focus({ monitor = "' + target + '" }))'
     var p = dispatchProc
-    p.command = ["bash", "-lc", "hyprctl eval '" + moveEval + "'; hyprctl eval '" + focusEval + "'"]
+    p.command = ["bash", "-lc",
+      "hyprctl eval 'o.workspaces.move_workspace_to_monitor(\"" + target + "\")' >/dev/null 2>&1 || true"]
     p.running = true
 
-    // Wait a beat for the move to land, then probe hyprctl for the focused
-    // monitor's real workspace so the context follows correctly. The poll
-    // timer also re-probes, so this self-heals even if the move is slow.
     Qt.callLater(function() {
       root.syncMonitors()
       root.stateUpdated()
@@ -284,164 +879,212 @@ Item {
     return "ok"
   }
 
-  function targetWorkspaceForMonitor(targetId, activeMonitor) {
-    var last = root.state.last_workspace ? root.state.last_workspace[targetId] : undefined
-    if (last === undefined || last === null) last = 1
-    return Model.realWorkspaceId(root.config, targetId, last)
+  // Move the active workspace to the monitor in a spatial direction. This uses
+  // the same target resolution and guard path as SUPER+backslash, rather than
+  // Hyprland's own directional monitor lookup.
+  function moveWorkspaceInDirection(direction) {
+    root.syncMonitors()
+    var targetName = root.monitorInDirection(direction)
+    if (!targetName) return "error"
+    var p = dispatchProc
+    p.command = ["bash", "-lc",
+      "hyprctl eval 'o.workspaces.move_workspace_to_monitor(\"" + targetName + "\")' >/dev/null 2>&1 || true"]
+    p.running = true
+    Qt.callLater(function() {
+      root.syncMonitors()
+      root.stateUpdated()
+    })
+    return "ok"
   }
 
   // ---- Commands (invoked from IPC) ----
 
-  // Switch the active monitor's context to targetId, restoring its last slot.
+  // Go to a context: focus the monitor that owns it and activate it there.
   function switchContext(targetId) {
     if (!Model.contextExists(root.config, targetId)) { root.lastError = "unknown context: " + targetId; return "unknown" }
     root.syncMonitors()
-    var monitor = root.focusedMonitorName
+    var focusedIdentity = root.focusedMonitorIdentity
+    var owner = root.contextOwnerFor(targetId)
+    var targetIdentity = owner
+    var adopt = false
+
+    if (!owner || !root.isMonitorConnected(owner)) {
+      var host = root.monitorHostingContext(targetId)
+      targetIdentity = host || focusedIdentity
+      adopt = true
+    }
+    if (!targetIdentity) { root.lastError = "no monitor for context " + targetId; return "error" }
+
+    if (adopt) {
+      var owners = Object.assign({}, root.state.context_monitor || {})
+      owners[targetId] = targetIdentity
+      root.state = Object.assign({}, root.state, { context_monitor: owners })
+      root.bumpGeneration()
+      root.moveContextWorkspacesToMonitor(targetId, targetIdentity)
+    }
+
+    var targetName = root.monitorNameForIdentity(targetIdentity)
+    if (!targetName) { root.lastError = "monitor not found for " + targetIdentity; return "error" }
+
     var last = root.state.last_workspace ? root.state.last_workspace[targetId] : 1
     if (last === undefined || last === null) last = 1
-    var targetWs = Model.realWorkspaceId(root.config, targetId, last)
+    var targetWs = root.workspaceIdForManager(targetIdentity, targetId, last)
+    if (targetWs === undefined) { root.lastError = "no block for context " + targetId; return "error" }
 
-    root.focusWorkspace(targetWs)
+    var p = dispatchProc
+    p.command = ["bash", "-lc",
+      "hyprctl eval 'hl.dispatch(hl.dsp.focus({ monitor = \"" + targetName + "\" }))'\n" +
+      "hyprctl eval 'hl.dispatch(hl.dsp.focus({ workspace = \"" + targetWs + "\" }))'"]
+    p.running = true
 
-    // The context belongs to whichever monitor actually ends up showing it.
     Qt.callLater(function() {
       root.syncMonitors()
-      var activeMonitor = root.focusedMonitorName
-      root.state = Model.setMonitorContext(root.state, activeMonitor, targetId)
+      root.state = Model.setMonitorContext(root.state, targetIdentity, targetId)
       root.state = Model.setLastWorkspace(root.state, targetId, last)
       root.persistState()
+      root.writeBlocks()
+      root.reconcileWorkspaces()
       root.refreshCurrentContext()
       root.stateUpdated()
     })
     return "ok"
   }
 
-  // Go to a slot within the active monitor's current context.
+  // Go to a slot in the focused monitor's active manager.
   function gotoSlot(slotStr) {
     var slot = Number(slotStr)
     if (!isFinite(slot) || slot < 1 || slot > (root.config.slots || 10)) { root.lastError = "invalid slot"; return "error" }
     root.syncMonitors()
-    var current = root.currentContextId
-    var targetWs = Model.realWorkspaceId(root.config, current, slot)
+    var identity = root.focusedMonitorIdentity
+    var manager = root.activeManagerFor(identity)
+    var targetWs = root.workspaceIdForManager(identity, manager, slot)
+    if (targetWs === undefined) { root.lastError = "no block for " + manager; return "error" }
 
     root.focusWorkspace(targetWs)
     Qt.callLater(function() {
       root.syncMonitors()
-      var activeMonitor = root.focusedMonitorName
-      root.state = Model.setMonitorContext(root.state, activeMonitor, current)
-      root.state = Model.setLastWorkspace(root.state, current, slot)
+      if (manager !== "default") {
+        root.state = Model.setMonitorContext(root.state, identity, manager)
+        root.state = Model.setLastWorkspace(root.state, manager, slot)
+      }
       root.persistState()
+      root.writeBlocks()
       root.refreshCurrentContext()
       root.stateUpdated()
     })
     return "ok"
   }
 
-  // Move the active window to a slot in the current context.
+  // Move the active window to a slot in the active manager.
   function moveWindow(slotStr, silent) {
     var slot = Number(slotStr)
     if (!isFinite(slot) || slot < 1 || slot > (root.config.slots || 10)) { root.lastError = "invalid slot"; return "error" }
     root.syncMonitors()
-    var current = root.currentContextId
-    var targetWs = Model.realWorkspaceId(root.config, current, slot)
+    var identity = root.focusedMonitorIdentity
+    var manager = root.activeManagerFor(identity)
+    var targetWs = root.workspaceIdForManager(identity, manager, slot)
+    if (targetWs === undefined) { root.lastError = "no block for " + manager; return "error" }
     var monitor = root.focusedMonitorName
 
-    // Move the window to the slot workspace; keep it on the active monitor.
-    root.moveWorkspaceToMonitor(targetWs, monitor)
-    root.moveWindowTo(targetWs, silent)
+    var moveWs = 'hl.dispatch(hl.dsp.workspace.move({ workspace = "' + targetWs + '", monitor = "' + monitor + '" }))'
+    var moveWin = 'hl.dispatch(hl.dsp.window.move({ workspace = "' + targetWs + '", follow = ' + (silent ? "false" : "true") + ' }))'
+    var p = dispatchProc
+    p.command = ["bash", "-lc", "hyprctl eval '" + moveWs + "'; hyprctl eval '" + moveWin + "'"]
+    p.running = true
+
     Qt.callLater(function() {
       root.syncMonitors()
-      var activeMonitor = root.focusedMonitorName
-      root.state = Model.setMonitorContext(root.state, activeMonitor, current)
-      root.state = Model.setLastWorkspace(root.state, current, slot)
+      if (manager !== "default") {
+        root.state = Model.setMonitorContext(root.state, identity, manager)
+        root.state = Model.setLastWorkspace(root.state, manager, slot)
+      }
       root.persistState()
+      root.writeBlocks()
       root.stateUpdated()
     })
     return "ok"
   }
 
   // Move the active workspace's windows to the first empty slot of targetId.
-  // Moves every window in the active workspace (by address) to the target
-  // workspace, then focuses it — matching the legacy move-workspace behaviour.
-  // The window-move loop lives in a helper script to avoid fragile QML->bash
-  // string escaping.
   function moveWorkspace(targetId) {
     if (!Model.contextExists(root.config, targetId)) { root.lastError = "unknown context: " + targetId; return "unknown" }
     root.refreshWorkspaces()
-    var slot = Model.findFirstEmptySlot(root.workspacesById, root.config, targetId)
-    var targetWs = Model.realWorkspaceId(root.config, targetId, slot)
+    root.syncMonitors()
+    var owner = root.contextOwnerFor(targetId)
+    if (!owner || !root.isMonitorConnected(owner)) {
+      owner = root.focusedMonitorIdentity
+      var owners = Object.assign({}, root.state.context_monitor || {})
+      owners[targetId] = owner
+      root.state = Object.assign({}, root.state, { context_monitor: owners })
+      root.bumpGeneration()
+    }
+    var targetName = root.monitorNameForIdentity(owner)
+    var slot = root.findFirstEmptySlot(owner, targetId)
+    if (slot === 0) { root.lastError = "context is full: " + targetId; return "full" }
+    var targetWs = root.workspaceIdForManager(owner, targetId, slot)
+    if (targetWs === undefined || !targetName) { root.lastError = "no block for context " + targetId; return "error" }
 
     var source = Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : 0
     if (source > 0 && source !== targetWs) {
       var p = dispatchProc
-      p.command = ["bash", "-lc", "omarchy-context-switcher-move-workspace " + source + " " + targetWs]
+      p.command = ["bash", "-lc",
+        "hyprctl eval 'hl.dispatch(hl.dsp.workspace.move({ workspace = \"" + targetWs + "\", monitor = \"" + targetName + "\" }))' >/dev/null 2>&1 || true\n" +
+        "omarchy-context-switcher-move-workspace " + source + " " + targetWs]
       p.running = true
     }
 
     Qt.callLater(function() {
       root.syncMonitors()
-      var activeMonitor = root.focusedMonitorName
-      root.state = Model.setMonitorContext(root.state, activeMonitor, targetId)
+      root.state = Model.setMonitorContext(root.state, owner, targetId)
       root.state = Model.setLastWorkspace(root.state, targetId, slot)
       root.persistState()
+      root.writeBlocks()
       root.stateUpdated()
     })
     return "ok"
   }
 
-  // Cycle to next/prev workspace globally, updating the active monitor context.
+  // Cycle slots within the focused monitor's active manager.
   function cycleWorkspace(direction) {
     root.syncMonitors()
     root.refreshWorkspaces()
-    var currentWs = Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : 1
+    var identity = root.focusedMonitorIdentity
+    var manager = root.activeManagerFor(identity)
     var slots = root.config.slots || 10
-    var maxWs = 0
-    var contexts = root.config.contexts || []
-    for (var i = 0; i < contexts.length; i++) {
-      var b = i * slots + 1
-      var top = b + slots - 1
-      if (top > maxWs) maxWs = top
+    var block = root.managerBlockFor(identity, manager)
+    if (block === undefined) return "error"
+
+    var currentWs = Hyprland.focusedWorkspace ? Number(Hyprland.focusedWorkspace.id) : 0
+    var slot = 1
+    if (currentWs > 0 && Math.floor((currentWs - 1) / slots) === block) {
+      slot = Model.slotForBlock(currentWs, slots)
     }
-    var targetWs = direction === "prev" ? currentWs - 1 : currentWs + 1
-    if (targetWs < 1) targetWs = maxWs
-    if (targetWs > maxWs) targetWs = 1
+    var targetSlot = direction === "prev" ? slot - 1 : slot + 1
+    if (targetSlot < 1) targetSlot = slots
+    if (targetSlot > slots) targetSlot = 1
+    var targetWs = Model.workspaceIdForBlock(block, slots, targetSlot)
 
     root.focusWorkspace(targetWs)
     Qt.callLater(function() {
       root.syncMonitors()
-      var activeMonitor = root.focusedMonitorName
-      var targetCtx = Model.contextForWorkspace(root.config, targetWs)
-      var slot = Model.slotForWorkspace(root.config, targetWs)
-      if (targetCtx) {
-        root.state = Model.setMonitorContext(root.state, activeMonitor, targetCtx)
-        root.state = Model.setLastWorkspace(root.state, targetCtx, slot)
-        root.persistState()
-        root.stateUpdated()
+      if (manager !== "default") {
+        root.state = Model.setMonitorContext(root.state, identity, manager)
+        root.state = Model.setLastWorkspace(root.state, manager, targetSlot)
       }
+      root.persistState()
+      root.writeBlocks()
+      root.stateUpdated()
     })
     return "ok"
   }
 
-  // Switch to next/prev context.
-  function switchRelative(delta) {
-    root.syncMonitors()
-    var monitor = root.focusedMonitorName
-    var current = root.currentContextId
-    var contexts = root.config.contexts || []
-    if (contexts.length === 0) return "unknown"
-    var idx = Model.contextIndex(root.config, current)
-    if (idx < 0) idx = 0
-    var n = contexts.length
-    var nextIdx = ((idx + delta) % n + n) % n
-    return root.switchContext(contexts[nextIdx].id)
-  }
-
-  function nextContext() { return root.switchRelative(1) }
-  function prevContext() { return root.switchRelative(-1) }
+  function nextContext() { return root.cycleContext("next") }
+  function prevContext() { return root.cycleContext("prev") }
 
   function currentContextName() {
     root.syncMonitors()
     root.refreshWorkspaces()
+    if (!root.currentContextId) return "Default"
     return Model.contextName(root.config, root.currentContextId)
   }
 
@@ -450,11 +1093,11 @@ Item {
     var contexts = root.config.contexts || []
     for (var i = 0; i < contexts.length; i++) {
       var c = contexts[i]
-      out.push(c.id + "\t" + (c.name || c.id) + "\t" + (c.shortcut || ""))
+      var owner = root.contextOwnerFor(c.id)
+      out.push(c.id + "\t" + (c.name || c.id) + "\t" + (c.shortcut || "") + "\t" + owner)
     }
     return out.join("\n")
   }
-
   function validateConfig() {
     // Minimal validation; returns config-valid string.
     if (root.configLoaded) return "Config is valid"
@@ -798,12 +1441,12 @@ Item {
     barFixProc.command = ["bash", "-lc",
       "SJ=\"$HOME/.config/omarchy/shell.json\"\n" +
       "[[ -f \"$SJ\" ]] || exit 0\n" +
-      "B=$(md5sum \"$SJ\" | cut -d' ' -f1)\n" +
       "T=$(mktemp \"$SJ.XXXXXX\") || exit 0\n" +
       "trap 'rm -f \"$T\"' EXIT\n" +
-      "jq '(.bar.layout.left) = ([.bar.layout.left[]? | select(.id != \"omarchy.workspaces\" and .id != \"context-switcher\")] + [{\"id\": \"context-switcher\"}])' \"$SJ\" > \"$T\" && chmod 0644 \"$T\" && mv \"$T\" \"$SJ\"\n" +
-      "A=$(md5sum \"$SJ\" | cut -d' ' -f1)\n" +
-      "if [[ \"$B\" != \"$A\" ]]; then omarchy-shell shell reloadConfig >/dev/null 2>&1 || true; fi"]
+      "jq '(.bar.layout.left) = ([.bar.layout.left[]? | select(.id != \"omarchy.workspaces\" and .id != \"context-switcher\")] + [{\"id\": \"context-switcher\"}])' \"$SJ\" > \"$T\"\n" +
+      "if cmp -s \"$SJ\" \"$T\"; then rm -f \"$T\"; exit 0; fi\n" +
+      "chmod 0644 \"$T\" && mv \"$T\" \"$SJ\"\n" +
+      "omarchy-shell shell reloadConfig >/dev/null 2>&1 || true"]
     barFixProc.running = true
   }
 
@@ -878,8 +1521,42 @@ Item {
     id: stateWriter
   }
 
+  // Reads Omarchy's monitor -> default block assignment for the permanent
+  // fallback workspace-managers.
+  Process {
+    id: defaultBlocksProbe
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyDefaultBlocks(text)
+    }
+  }
+
   Process {
     id: dispatchProc
+  }
+
+  // Writes ~/.local/state/context-switcher/blocks.lua for the Hyprland guard.
+  Process { id: blocksWriter }
+
+  // Runs the guard's reconcile/reload via hyprctl eval (no config reload).
+  Process { id: workspaceProc }
+
+  // One-time migration to context-owned virtual workspace-managers.
+  Process {
+    id: migrateProc
+    onExited: function(exitCode, exitStatus) {
+      root.migrationStarted = false
+      if (exitCode === 0 && exitStatus === 0) {
+        root.lastError = ""
+        root.loadState()
+        Qt.callLater(function() {
+          root.seedMonitors()
+          root.reconcileWorkspaces()
+        })
+      } else {
+        root.lastError = "workspace migration failed"
+      }
+    }
   }
 
   // Owns the delete-context helper, which moves workspaces into a target
@@ -893,6 +1570,10 @@ Item {
         root.loadConfig()
         root.loadState()
         root.regenerateMenu()
+        Qt.callLater(function() {
+          root.writeBlocks()
+          root.reconcileWorkspaces()
+        })
       } else {
         root.lastError = "context delete failed"
       }
@@ -914,7 +1595,7 @@ Item {
 
   function seedProbeCommand() {
     return ["bash", "-lc",
-      "hyprctl monitors -j 2>/dev/null | jq -r '.[] | \"\\(.name)\\t\\(.activeWorkspace.id)\\t\\(.focused)\"'"]
+      "hyprctl monitors -j 2>/dev/null | jq -r '.[] | \"\\(.name)\\t\\(.activeWorkspace.id)\\t\\(.focused)\\t\\(.description)\"'"]
   }
 
   function seedMonitors() {
@@ -925,19 +1606,49 @@ Item {
   function applySeed(raw) {
     var text = String(raw || "").trim()
     var map = {}
+    var identities = {}
     var lines = text.split("\n")
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim()
       if (!line) continue
       var p = line.split("\t")
       if (p.length < 2) continue
-      map[p[0]] = Number(p[1]) || 0
+      var name = p[0]
+      if (!name || name === "FALLBACK") continue
+      map[name] = Number(p[1]) || 0
+      identities[name] = (p.length >= 4 && p[3]) ? p[3] : name
     }
     var focused = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
     root.monitorActiveWorkspace = map
+    root.monitorIdentities = identities
     if (focused) root.focusedMonitorName = focused
+    root.migrateMonitorContextKeys()
+    if (root.state.context_model === 2) {
+      var blocksChanged = root.ensureContextBlocks()
+      var ownersChanged = root.ensureContextOwners()
+      root.loadDefaultBlocks()
+      root.sanitizeActiveManagers()
+      root.writeBlocks()
+      if (blocksChanged || ownersChanged) root.reconcileWorkspaces()
+    }
+    root.syncAllMonitors()
     root.syncMonitors()
+    if (!root.startupReconciled && root.state.context_model === 2) {
+      root.startupReconciled = true
+      root.reconcileWorkspaces(true)
+    } else if (root.needsReconcile) {
+      root.needsReconcile = false
+      root.reconcileWorkspaces(true)
+    }
     root.stateUpdated()
+    Qt.callLater(function() { root.maybeMigrate() })
+  }
+
+  // Debounce monitor/config events into a single re-probe. A hotplug emits a
+  // burst of workspace/moveworkspace events; probing once after it settles
+  // avoids persisting intermediate contexts.
+  function scheduleSeed() {
+    seedTimer.restart()
   }
 
   // Event-driven monitor tracking driven by raw Hyprland events, which carry
@@ -954,11 +1665,23 @@ Item {
     // workspace / moveworkspace <workspace> <monitor>: a workspace is now on a monitor.
     } else if (name === "workspace" || name === "moveworkspace") {
       if (parts.length >= 2) root.setMonitorWorkspace(parts[1], Number(parts[0]) || 0, false)
+      if (name === "moveworkspace") root.needsReconcile = true
       // The source monitor's fallback workspace is not in the event, so do a
       // one-shot re-probe to refresh the full map. Event-triggered only (not
       // polling), so it does not stall interaction.
       if (!seedProbe.running) { seedProbe.command = root.seedProbeCommand(); seedProbe.running = true }
+    } else if (name === "monitoradded" || name === "monitoraddedv2" ||
+               name === "monitorremoved" || name === "monitorremovedv2" ||
+               name === "configreloaded") {
+      root.scheduleSeed()
     }
+  }
+
+  Timer {
+    id: seedTimer
+    interval: 400
+    repeat: false
+    onTriggered: root.seedMonitors()
   }
 
   // Update one monitor's active workspace from authoritative event data and
@@ -971,18 +1694,44 @@ Item {
     var mapChanged = JSON.stringify(map) !== JSON.stringify(root.monitorActiveWorkspace)
     root.monitorActiveWorkspace = map
 
-    var activeWs = wsId
-    if (focused) activeWs = wsId
-    var derived = activeWs > 0 ? Model.contextForWorkspace(root.config, activeWs) : ""
+    // Update the monitor that changed, not whichever monitor happens to be
+    // focused. Otherwise a workspace move on the other monitor rewrites this
+    // monitor's context.
+    var identity = root.identityForMonitor(monitor)
+    var info = wsId > 0 ? root.managerForWorkspace(identity, wsId) : null
     var changed = mapChanged
-    if (derived) {
-      if (derived !== root.currentContextId) changed = true
-      root.currentContextId = derived
-      var existing = (root.state.monitor_context || {})[root.focusedMonitorName]
-      if (existing !== derived) {
-        root.state = Model.setMonitorContext(root.state, root.focusedMonitorName, derived)
-        root.persistState()
+
+    if (info) {
+      if (info.manager === "default") {
+        var mc = Object.assign({}, root.state.monitor_context || {})
+        if (mc[identity] !== undefined) {
+          delete mc[identity]
+          root.state = Object.assign({}, root.state, { monitor_context: mc })
+          root.persistState()
+          root.writeBlocks()
+          changed = true
+        }
+      } else {
+        var owner = root.contextOwnerFor(info.manager)
+        // A guest context owned by a connected other monitor is not this
+        // monitor's active manager.
+        if (!owner || owner === identity || !root.isMonitorConnected(owner)) {
+          var existing = (root.state.monitor_context || {})[identity]
+          if (existing !== info.manager) {
+            root.state = Model.setMonitorContext(root.state, identity, info.manager)
+            root.persistState()
+            root.writeBlocks()
+            changed = true
+          }
+        }
       }
+    }
+
+    if (focused) {
+      var manager = root.activeManagerFor(identity)
+      var nextContext = manager === "default" ? "" : manager
+      if (nextContext !== root.currentContextId) changed = true
+      root.currentContextId = nextContext
     }
     if (changed) root.stateUpdated()
   }
@@ -996,6 +1745,7 @@ Item {
   Component.onCompleted: {
     root.loadConfig()
     root.loadState()
+    root.loadDefaultBlocks()
     // Seed the authoritative monitor map once from hyprctl; events keep it
     // fresh afterwards (no polling).
     Qt.callLater(function() { root.seedMonitors() })
@@ -1030,6 +1780,10 @@ Item {
     function moveWorkspace(contextId: string): string { return root.moveWorkspace(contextId) }
     function cycle(direction: string): string { return root.cycleWorkspace(direction) }
     function cycleMonitor(direction: string): string { return root.cycleMonitor(direction) }
+    function moveWorkspaceToMonitor(direction: string): string { return root.moveWorkspaceInDirection(direction) }
+    function contextNext(): string { return root.nextContext() }
+    function contextPrev(): string { return root.prevContext() }
+    function moveContext(direction: string): string { return root.moveContext(direction) }
     function next(): string { return root.nextContext() }
     function prev(): string { return root.prevContext() }
     function current(): string { return root.currentContextName() }
@@ -1059,8 +1813,12 @@ Item {
     function edit(view: string, contextId: string, itemPath: string): string { return root.openEditor(view, contextId, itemPath) }
     function status(): string {
       return JSON.stringify({ configLoaded: root.configLoaded, stateLoaded: root.stateLoaded,
-        focusedMonitor: root.focusedMonitorName, currentContext: root.currentContextId,
-        contexts: (root.config.contexts || []).length, error: root.lastError })
+        focusedMonitor: root.focusedMonitorName, focusedMonitorIdentity: root.focusedMonitorIdentity,
+        currentContext: root.currentContextId, activeManager: root.activeManagerFor(root.focusedMonitorIdentity),
+        contexts: (root.config.contexts || []).length,
+        contextModel: Number(root.state.context_model) || 0,
+        migrated: !!root.state.migrated, generation: Number(root.state.generation) || 0,
+        error: root.lastError })
     }
   }
 }

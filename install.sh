@@ -43,7 +43,7 @@ echo "and remove it later with: omarchy-context-switcher skill unlink"
 
 # 2. CLI + generator scripts -> ~/.local/bin/
 echo "--- CLI ---"
-for f in omarchy-context-switcher omarchy-context-switcher-generate omarchy-context-switcher-move-workspace omarchy-context-switcher-delete-context omarchy-context-switcher-launch omarchy-context-switcher-profiles omarchy-context-switcher-disable omarchy-context-switcher-teardown omarchy-context-switcher-setup omarchy-context-switcher-init omarchy-context-switcher-icons; do
+for f in omarchy-context-switcher omarchy-context-switcher-generate omarchy-context-switcher-move-workspace omarchy-context-switcher-delete-context omarchy-context-switcher-launch omarchy-context-switcher-profiles omarchy-context-switcher-disable omarchy-context-switcher-teardown omarchy-context-switcher-setup omarchy-context-switcher-init omarchy-context-switcher-icons omarchy-context-switcher-migrate; do
   if [[ -f "$BIN_DIR/$f" ]]; then cp -a "$BIN_DIR/$f" "$BACKUP_DIR/" 2>/dev/null || true; fi
   cp "$REPO/bin/$f" "$BIN_DIR/$f"
   chmod +x "$BIN_DIR/$f"

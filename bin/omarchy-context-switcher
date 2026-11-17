@@ -13,10 +13,14 @@ Commands:
   move <slot>           Move active window to slot in current context
   move-silent <slot>    Move active window silently to slot
   move-workspace <ctx>  Move active workspace to first empty slot in context
-  cycle next|prev       Cycle to next/prev workspace globally, updating context
-  cycle-monitor [dir]   Move active workspace to next/prev monitor, focus it there
-  next                  Switch to next context
-  prev                  Switch to previous context
+  cycle next|prev       Cycle workspace slots in the active context
+  cycle-monitor [dir]   Move active workspace to next/prev monitor
+  move-workspace-to-monitor <dir>  Move active workspace to the monitor in <dir>
+  context-next          Activate the next context owned by this monitor
+  context-prev          Activate the previous context owned by this monitor
+  move-context <dir>    Move the active context to the monitor in <dir>
+  next                  Same as context-next
+  prev                  Same as context-prev
   current               Print current context name
   list                  List all contexts
   menu [context]        Open the system menu (picker, or a context's items)
@@ -57,8 +61,12 @@ case "$cmd" in
   move-workspace) omarchy-shell context moveWorkspace "${1:-}" ;;
   cycle)         omarchy-shell context cycle "${1:-next}" ;;
   cycle-monitor) omarchy-shell context cycleMonitor "${1:-next}" ;;
-  next)          omarchy-shell context next ;;
-  prev)          omarchy-shell context prev ;;
+  move-workspace-to-monitor) omarchy-shell context moveWorkspaceToMonitor "${1:-next}" ;;
+  context-next)  omarchy-shell context contextNext ;;
+  context-prev)  omarchy-shell context contextPrev ;;
+  move-context)  omarchy-shell context moveContext "${1:-next}" ;;
+  next)          omarchy-shell context contextNext ;;
+  prev)          omarchy-shell context contextPrev ;;
   current)       omarchy-shell context current ;;
   list)          omarchy-shell context list ;;
   menu)          omarchy-shell context openMenu "${1:-}" ;;

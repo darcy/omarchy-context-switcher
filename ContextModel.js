@@ -64,7 +64,171 @@ function findFirstEmptySlot(workspacesById, config, id) {
 
 // Default state when none exists yet.
 function defaultState() {
-  return { last_workspace: {}, monitor_context: {} }
+  return {
+    last_workspace: {},
+    monitor_context: {},
+    context_blocks: {},
+    context_monitor: {},
+    default_blocks: {},
+    monitor_order: [],
+    next_block: 100,
+    manual: {},
+    generation: 0,
+    context_model: 0,
+    migrated: false
+  }
+}
+
+// Default Omarchy workspace-manager block for a monitor identity.
+function defaultBlock(state, identity) {
+  var blocks = (state && state.default_blocks) || {}
+  return blocks[identity]
+}
+
+// A context's own block (a virtual workspace-manager).
+function contextBlock(state, contextId) {
+  var blocks = (state && state.context_blocks) || {}
+  return blocks[contextId]
+}
+
+// The monitor that owns a context.
+function contextOwner(state, contextId) {
+  var owners = (state && state.context_monitor) || {}
+  return owners[contextId] || ""
+}
+
+// The active context on a monitor, or "" when the default manager is active.
+function activeContext(state, identity) {
+  var active = (state && state.monitor_context) || {}
+  return active[identity] || ""
+}
+
+// The block for a monitor's active manager (context id or "default").
+function managerBlock(state, identity, manager) {
+  if (!manager || manager === "default") return defaultBlock(state, identity)
+  return contextBlock(state, manager)
+}
+
+function workspaceIdForManager(state, identity, manager, slots, slot) {
+  var block = managerBlock(state, identity, manager)
+  if (block === undefined) return undefined
+  return block * slots + slot
+}
+
+// Resolve a workspace id to the manager block that owns it. Returns
+// { manager, slot } or null when the id is not covered by a known block.
+function managerForWorkspace(state, identity, wsId, slots) {
+  var block = Math.floor((wsId - 1) / slots)
+  var slot = ((wsId - 1) % slots) + 1
+  var defaults = (state && state.default_blocks) || {}
+  if (defaults[identity] === block) return { manager: "default", slot: slot }
+
+  var contexts = (state && state.context_blocks) || {}
+  for (var contextId in contexts) {
+    if (contexts[contextId] === block) return { manager: contextId, slot: slot }
+  }
+  return null
+}
+
+// The context whose block contains a workspace id, or "".
+function contextForWorkspaceBlock(state, wsId, slots) {
+  var block = Math.floor((wsId - 1) / slots)
+  var contexts = (state && state.context_blocks) || {}
+  for (var contextId in contexts) {
+    if (contexts[contextId] === block) return contextId
+  }
+  return ""
+}
+
+// Allocate one block per context, starting at `startBlock` (default 100).
+// Existing blocks are never renumbered.
+function allocateContextBlocks(state, contextIds, startBlock) {
+  var next = Object.assign({}, state)
+  var blocks = Object.assign({}, state.context_blocks || {})
+  var nextBlock = Math.max(Number(startBlock) || 100, Number(state.next_block) || 0)
+  var changed = false
+
+  for (var i = 0; i < contextIds.length; i++) {
+    var contextId = contextIds[i]
+    if (blocks[contextId] === undefined) {
+      blocks[contextId] = nextBlock++
+      changed = true
+    }
+  }
+
+  if (!changed) return state
+  next.context_blocks = blocks
+  next.next_block = nextBlock
+  return next
+}
+
+// Per-monitor context blocks. Each physical monitor owns a block of `slots`
+// workspace ids per context. The block map is keyed by monitor identity
+// (Hyprland's monitor description, falling back to the connector name).
+function blockFor(state, identity, context) {
+  var blocks = (state && state.workspace_blocks) || {}
+  var monitor = blocks[identity]
+  if (!monitor) return undefined
+  return monitor[context]
+}
+
+function workspaceIdForBlock(block, slots, slot) {
+  return block * slots + slot
+}
+
+// Resolve a workspace id back to its monitor identity + context via the block
+// map. Returns null when the id is not covered by a known block.
+function blockOwnerForWorkspace(state, wsId, slots) {
+  var blocks = (state && state.workspace_blocks) || {}
+  var block = Math.floor((wsId - 1) / slots)
+  for (var identity in blocks) {
+    var contexts = blocks[identity]
+    for (var context in contexts) {
+      if (contexts[context] === block) return { identity: identity, context: context }
+    }
+  }
+  return null
+}
+
+// Slot (1-based) of a workspace id within its block.
+function slotForBlock(wsId, slots) {
+  return ((wsId - 1) % slots) + 1
+}
+
+// Allocate a block for every (monitor identity, context) pair that does not
+// have one yet. Existing blocks are never renumbered; new blocks append to
+// next_block so adding a context or a monitor does not disturb live workspaces.
+function allocateBlocks(state, identities, contexts) {
+  var next = Object.assign({}, state)
+  var blocks = Object.assign({}, state.workspace_blocks || {})
+  var order = (state.monitor_order || []).slice()
+  var nextBlock = Number(state.next_block) || 0
+  var changed = false
+
+  for (var i = 0; i < identities.length; i++) {
+    var identity = identities[i]
+    if (order.indexOf(identity) === -1) {
+      order.push(identity)
+      changed = true
+    }
+    if (!blocks[identity]) {
+      blocks[identity] = {}
+      changed = true
+    }
+    for (var j = 0; j < contexts.length; j++) {
+      var context = contexts[j]
+      if (blocks[identity][context] === undefined) {
+        blocks[identity][context] = nextBlock++
+        changed = true
+      }
+    }
+  }
+
+  if (!changed) return state
+  next.workspace_blocks = blocks
+  next.monitor_order = order
+  next.next_block = nextBlock
+  return next
 }
 
 // Safe accessor for monitor context with a default.
@@ -124,6 +288,20 @@ if (typeof module !== "undefined") {
     setMonitorContext: setMonitorContext,
     setLastWorkspace: setLastWorkspace,
     slotForWorkspace: slotForWorkspace,
+    blockFor: blockFor,
+    workspaceIdForBlock: workspaceIdForBlock,
+    blockOwnerForWorkspace: blockOwnerForWorkspace,
+    slotForBlock: slotForBlock,
+    allocateBlocks: allocateBlocks,
+    defaultBlock: defaultBlock,
+    contextBlock: contextBlock,
+    contextOwner: contextOwner,
+    activeContext: activeContext,
+    managerBlock: managerBlock,
+    workspaceIdForManager: workspaceIdForManager,
+    managerForWorkspace: managerForWorkspace,
+    contextForWorkspaceBlock: contextForWorkspaceBlock,
+    allocateContextBlocks: allocateContextBlocks,
     slugify: slugify,
     normalizeShortcut: normalizeShortcut
   }

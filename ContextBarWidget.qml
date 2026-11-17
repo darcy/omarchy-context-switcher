@@ -42,6 +42,21 @@ BarWidget {
     return (w && w.screen) ? String(w.screen.name || "") : ""
   }
 
+  // Stable hardware identity for this monitor (description, then connector).
+  readonly property string myMonitorIdentity: {
+    void root.revision
+    if (service) return service.identityForMonitor(root.myMonitor)
+    var mons = Hyprland.monitors.values
+    for (var i = 0; i < mons.length; i++) {
+      var m = mons[i]
+      if (m && String(m.name || "") === root.myMonitor) {
+        var description = String(m.description || "")
+        return description !== "" ? description : root.myMonitor
+      }
+    }
+    return root.myMonitor
+  }
+
   // The workspace id this monitor is currently displaying.
   // Prefer the service's authoritative hyprctl-derived map (which stays fresh
   // across cross-monitor moves) over the lagging Quickshell monitors model.
@@ -59,23 +74,31 @@ BarWidget {
     return 0
   }
 
-  // This monitor's context: derived from the workspace it is showing, falling
-  // back to the persisted per-monitor context, then the default.
-  readonly property string contextId: {
+  // This monitor's active manager: a context id, or "default" for Omarchy's
+  // permanent workspace-manager.
+  readonly property string activeManager: {
     void root.revision
-    if (!service || !service.config) return "personal"
-    var derived = root.myMonitorWorkspaceId > 0
-      ? Model.contextForWorkspace(service.config, root.myMonitorWorkspaceId)
-      : ""
-    if (derived) return derived
-    var mc = (service.state && service.state.monitor_context) ? service.state.monitor_context : {}
-    return (root.myMonitor && mc[root.myMonitor]) ? mc[root.myMonitor] : (service.currentContextId || "personal")
+    if (!service) return "default"
+    return service.activeManagerFor(root.myMonitorIdentity) || "default"
   }
 
-  readonly property string contextName: service ? Model.contextName(service.config || { contexts: [] }, root.contextId) : ""
+  // Empty when the default manager is active (no context label).
+  readonly property string contextId: root.activeManager === "default" ? "" : root.activeManager
+
+  // This monitor's block for the active manager (block * slots + slot).
+  readonly property int block: {
+    void root.revision
+    if (!service) return 0
+    var value = service.managerBlockFor(root.myMonitorIdentity, root.activeManager)
+    return value === undefined ? 0 : Number(value)
+  }
+
+  readonly property string contextName: (service && root.contextId)
+    ? Model.contextName(service.config || { contexts: [] }, root.contextId)
+    : ""
   // The shortcut letter that summons this context's menu (shown when vertical).
   readonly property string contextShortcut: {
-    if (!service || !service.config) return ""
+    if (!service || !service.config || !root.contextId) return ""
     var c = Model.contextById(service.config, root.contextId)
     return c ? (c.shortcut || "") : ""
   }
@@ -88,15 +111,14 @@ BarWidget {
     void root.revision
     var maxVisible = 5
     if (service && service.config && service.config.contexts) {
-      var cfg = service.config
-      var base = Model.contextBase(cfg, root.contextId)
+      var base = root.block * root.slots
       var values = Hyprland.workspaces.values
       for (var i = 0; i < values.length; i++) {
         var ws = values[i]
         if (!ws) continue
         var id = ws.id
-        if (id < base || id >= base + root.slots) continue  // not in this context
-        var slot = id - base + 1
+        if (id < base + 1 || id >= base + root.slots + 1) continue
+        var slot = id - base
         var occupied = ws.toplevels && ws.toplevels.values && ws.toplevels.values.length > 0
         if (occupied && slot > maxVisible) maxVisible = slot
       }
@@ -110,22 +132,19 @@ BarWidget {
   }
 
   // The active slot = the workspace this monitor is showing, mapped into its
-  // context's slot range.
+  // context block.
   function activeSlot() {
-    var cfg = service && service.config ? service.config : null
-    if (!cfg) return 0
+    if (!service || !service.config) return 0
     void root.revision
     var wsId = root.myMonitorWorkspaceId
     if (wsId <= 0) return 0
-    var base = Model.contextBase(cfg, root.contextId)
-    var slot = wsId - base + 1
+    var slot = wsId - root.block * root.slots
     return (slot >= 1 && slot <= root.slots) ? slot : 0
   }
 
   function occupiedSlot(slot) {
     if (!service || !service.workspacesById) return false
-    var base = Model.contextBase(service.config || { contexts: [], slots: root.slots }, root.contextId)
-    var occ = !!service.workspacesById[String(base + slot - 1)]
+    var occ = !!service.workspacesById[String(root.block * root.slots + slot)]
     void root.revision
     return occ
   }
@@ -141,7 +160,7 @@ BarWidget {
   GridLayout {
     id: grid
     anchors.fill: parent
-    columns: root.vertical ? 1 : (root.workspaceIds.length + 1)
+    columns: root.vertical ? 1 : (root.workspaceIds.length + (root.contextName !== "" ? 1 : 0))
     columnSpacing: root.vertical ? 0 : Style.space(1)
     rowSpacing: root.vertical ? Style.space(2) : 0
 
@@ -150,14 +169,15 @@ BarWidget {
     WidgetButton {
       id: contextButton
       bar: root.bar
+      visible: root.contextName !== ""
       text: root.vertical ? root.contextShortcut : root.contextName
       horizontalMargin: 6
       verticalPadding: 6
       fixedWidth: root.vertical ? root.barSize : -1
       fixedHeight: root.barSize
-      tooltipText: (root.vertical ? root.contextName + "\n" : "") + "Context (click: menu, right: next)"
+      tooltipText: (root.vertical && root.contextName !== "" ? root.contextName + "\n" : "") + "Context (click: menu, right: next)"
       onPressed: function(b) {
-        if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-context-switcher next") }
+        if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-context-switcher context-next") }
         else if (root.bar) root.bar.run("omarchy-context-switcher menu")
       }
     }

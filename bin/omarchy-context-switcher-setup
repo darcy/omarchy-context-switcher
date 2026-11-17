@@ -32,7 +32,7 @@ fi
 # the service bootstraps it and regenerates these itself).
 CFG_OK=""
 [[ -f "$HOME/.config/context-switcher/config.json" ]] && CFG_OK=1
-if [[ ! -s "$CTX_BINDINGS" && -n "$CFG_OK" ]]; then
+if [[ -n "$CFG_OK" ]] && { [[ ! -s "$CTX_BINDINGS" ]] || ! grep -q 'Context Switcher workspace guard v2' "$CTX_BINDINGS"; }; then
   T=$(mktemp "$CTX_BINDINGS.XXXXXX") || exit 1
   if omarchy-context-switcher-generate --bindings > "$T" 2>/dev/null && chmod 0644 "$T" && mv "$T" "$CTX_BINDINGS"; then
     reload_binds=1

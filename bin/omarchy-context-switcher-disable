@@ -96,6 +96,10 @@ open(p, "w").write("\n".join(keep).rstrip() + "\n")
 PY
 fi
 rm -f "$CTX_BINDINGS"
+# Runtime state for the per-monitor workspace guard (removed with the bindings).
+rm -f "$HOME/.local/state/context-switcher/blocks.lua" \
+      "$HOME/.local/state/context-switcher/manual-workspaces" \
+      "$HOME/.local/state/context-switcher/reconcile-state"
 # Menu extension: remove only the plugin's contexts* routes; any other user
 # menu content stays (never delete the system menu's user layer wholesale).
 if [[ -f "$MENU_EXT" ]]; then

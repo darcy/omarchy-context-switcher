@@ -1,10 +1,8 @@
 #!/bin/bash
-# omarchy-context-switcher-delete-context: remove a context from config.json without
-# orphaning workspaces. Every window sitting in the deleted context's
-# workspace range is moved into the target context (or, when none is given
-# or only one context remains, consolidated to a contiguous 1..N default set),
-# the context is removed from config, persisted state is cleaned, and the
-# Hyprland keybindings are regenerated.
+# omarchy-context-switcher-delete-context: remove a context from config.json
+# without orphaning workspaces. Windows in the deleted context's block are moved
+# into the target context's block (or the first monitor's default block when no
+# target remains), then the context is removed from config and state.
 #
 # Usage: omarchy-context-switcher-delete-context <id> [target_id]
 set -euo pipefail
@@ -24,11 +22,15 @@ def run(c):
 def dsp(e):
     run("hyprctl eval " + shlex.quote("hl.dispatch(" + e + ")"))
 
+def hyprctl_json(args):
+    out = run("hyprctl " + args + " -j").stdout
+    return json.loads(out) if out.strip() else []
+
 def move_ws(src, dst):
     if src == dst:
         return
     try:
-        clients = json.loads(run("hyprctl clients -j").stdout)
+        clients = hyprctl_json("clients")
     except Exception:
         return
     for c in clients:
@@ -36,6 +38,23 @@ def move_ws(src, dst):
             dsp(f'hl.dsp.window.move({{ workspace = "{dst}", follow = false, window = "address:{c["address"]}" }})')
             time.sleep(0.04)
     dsp(f'hl.dsp.focus({{ workspace = "{dst}" }})')
+
+def atomic_write(path, content):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=os.path.basename(path) + ".")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+def identity(m):
+    return m.get("description") or m.get("name") or ""
 
 cid, target_id, CONFIG, STATE = sys.argv[1:5]
 
@@ -53,59 +72,122 @@ else:
     others = [c.get("id") for c in ctxs if c.get("id") != cid]
     tctx = others[0] if others else ""
 
-base = idx * slots + 1
-try:
-    wsl = json.loads(run("hyprctl workspaces -j").stdout)
-except Exception:
-    wsl = []
-occupied = sorted(int(w["id"]) for w in wsl
-                  if base <= int(w.get("id", 0)) < base + slots and w.get("windows", 0) > 0)
-
-def first_empty(ctxid, taken):
-    b = next(i for i, c in enumerate(cfg["contexts"]) if c.get("id") == ctxid) * slots + 1
-    for s in range(1, slots + 1):
-        w = b + s - 1
-        if w not in taken:
-            return w
-    return b
-
-taken = set()
-if tctx:
-    for src in occupied:
-        dst = first_empty(tctx, taken)
-        taken.add(dst)
-        move_ws(src, dst)
-else:
-    # Last context: consolidate its windows to 1..N, like the teardown path.
-    targets = list(range(1, len(occupied) + 1))
-    for src, dst in zip(occupied, targets):
-        move_ws(src, dst)
-
-cfg["contexts"] = [c for c in ctxs if c.get("id") != cid]
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CONFIG) or ".", prefix=os.path.basename(CONFIG) + ".", suffix=".tmp")
-with os.fdopen(fd, "w") as f:
-    json.dump(cfg, f, indent=2)
-os.replace(tmp, CONFIG)
-
+state = {}
 if os.path.exists(STATE):
     try:
         with open(STATE) as f:
-            st = json.load(f)
-        changed = False
-        if cid in st.get("last_workspace", {}):
-            st["last_workspace"].pop(cid, None)
-            changed = True
-        mc = st.get("monitor_context", {})
-        for k in [k for k, v in mc.items() if v == cid]:
-            mc.pop(k, None)
-            changed = True
-        if changed:
-            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE) or ".", prefix=os.path.basename(STATE) + ".", suffix=".tmp")
-            with os.fdopen(fd, "w") as f:
-                json.dump(st, f)
-            os.replace(tmp, STATE)
+            state = json.load(f)
     except Exception:
-        pass
+        state = {}
+
+if state.get("context_model") == 2:
+    monitors = hyprctl_json("monitors")
+    by_identity = {identity(m): m for m in monitors}
+    block = state.get("context_blocks", {}).get(cid)
+    owner = state.get("context_monitor", {}).get(cid)
+    target_block = state.get("context_blocks", {}).get(tctx) if tctx else None
+    target_owner = state.get("context_monitor", {}).get(tctx) if tctx else None
+    target_name = by_identity.get(target_owner, {}).get("name") if target_owner else ""
+
+    occupied = []
+    if block is not None:
+        wsl = hyprctl_json("workspaces")
+        occupied = sorted(
+            int(w["id"]) for w in wsl
+            if block * slots + 1 <= int(w.get("id", 0)) <= block * slots + slots
+            and w.get("windows", 0) > 0
+        )
+
+    if tctx and target_block is not None and target_name:
+        taken = set()
+        wsl = hyprctl_json("workspaces")
+        for w in wsl:
+            wid = int(w.get("id", 0))
+            if target_block * slots + 1 <= wid <= target_block * slots + slots and w.get("windows", 0) > 0:
+                taken.add(wid)
+        for src in occupied:
+            dst = None
+            for s in range(1, slots + 1):
+                candidate = target_block * slots + s
+                if candidate not in taken:
+                    dst = candidate
+                    break
+            if dst is None:
+                break
+            taken.add(dst)
+            dsp(f'hl.dsp.workspace.move({{ workspace = "{dst}", monitor = "{target_name}" }})')
+            move_ws(src, dst)
+    else:
+        order = state.get("monitor_order", [])
+        first = order[0] if order else ""
+        default_block = state.get("default_blocks", {}).get(first)
+        first_name = by_identity.get(first, {}).get("name") if first else ""
+        if default_block is not None and first_name:
+            targets = list(range(default_block * slots + 1, default_block * slots + 1 + len(occupied)))
+            for src, dst in zip(occupied, targets):
+                dsp(f'hl.dsp.workspace.move({{ workspace = "{dst}", monitor = "{first_name}" }})')
+                move_ws(src, dst)
+        else:
+            targets = list(range(1, len(occupied) + 1))
+            for src, dst in zip(occupied, targets):
+                move_ws(src, dst)
+
+    state.get("context_blocks", {}).pop(cid, None)
+    state.get("context_monitor", {}).pop(cid, None)
+    state.get("last_workspace", {}).pop(cid, None)
+    mc = state.get("monitor_context", {})
+    for k in [k for k, v in mc.items() if v == cid]:
+        mc.pop(k, None)
+    if owner and owner not in mc:
+        owned = [
+            c.get("id") for c in ctxs
+            if c.get("id") != cid and state.get("context_monitor", {}).get(c.get("id")) == owner
+        ]
+        if owned:
+            mc[owner] = owned[0]
+    state["generation"] = int(state.get("generation", 0)) + 1
+    atomic_write(STATE, json.dumps(state, separators=(",", ":")))
+else:
+    base = idx * slots + 1
+    wsl = hyprctl_json("workspaces")
+    occupied = sorted(
+        int(w["id"]) for w in wsl
+        if base <= int(w.get("id", 0)) < base + slots and w.get("windows", 0) > 0
+    )
+
+    def first_empty(ctxid, taken):
+        b = next(i for i, c in enumerate(cfg["contexts"]) if c.get("id") == ctxid) * slots + 1
+        for s in range(1, slots + 1):
+            w = b + s - 1
+            if w not in taken:
+                return w
+        return b
+
+    taken = set()
+    if tctx:
+        for src in occupied:
+            dst = first_empty(tctx, taken)
+            taken.add(dst)
+            move_ws(src, dst)
+    else:
+        targets = list(range(1, len(occupied) + 1))
+        for src, dst in zip(occupied, targets):
+            move_ws(src, dst)
+
+    if os.path.exists(STATE):
+        try:
+            with open(STATE) as f:
+                st = json.load(f)
+            st.get("last_workspace", {}).pop(cid, None)
+            mc = st.get("monitor_context", {})
+            for k in [k for k, v in mc.items() if v == cid]:
+                mc.pop(k, None)
+            atomic_write(STATE, json.dumps(st))
+        except Exception:
+            pass
+
+cfg["contexts"] = [c for c in ctxs if c.get("id") != cid]
+atomic_write(CONFIG, json.dumps(cfg, indent=2))
 PY
 
 # Deleting a context removes its shortcut binding; regenerate and reload.

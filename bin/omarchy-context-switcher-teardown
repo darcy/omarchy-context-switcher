@@ -87,6 +87,11 @@ if [[ -f "$MENU_EXT" ]]; then
   fi
 fi
 rm -f "$CTX_BINDINGS"
+# Runtime state for the per-monitor workspace guard. The guard itself lives in
+# context-bindings.lua, which is removed above, so these files are orphaned.
+rm -f "$HOME/.local/state/context-switcher/blocks.lua" \
+      "$HOME/.local/state/context-switcher/manual-workspaces" \
+      "$HOME/.local/state/context-switcher/reconcile-state"
 # Cleaning agent-skill links the user opted into (skill link): only remove
 # links that point at OUR skill dir — never touch anything else in those trees.
 SKILL_SRC="$HOME/.config/omarchy/plugins/context-switcher/skills/context-switcher"

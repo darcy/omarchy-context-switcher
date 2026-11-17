@@ -64,6 +64,509 @@ selftest() {
 
 gen_bindings() {
   cat <<'LUA'
+-- Context Switcher workspace guard v2: contexts are virtual workspace-managers,
+-- each with its own block, owned by one monitor. Every monitor keeps its
+-- Omarchy default block as a permanent fallback. Loaded after
+-- default.hypr.monitor-workspaces so it can replace reconcile/focus behaviour
+-- without disabling the per-monitor block model.
+local function context_switcher_workspaces()
+  local base = o.workspaces
+  if not base then
+    return nil
+  end
+
+  local SLOTS = 10
+  local state_home = os.getenv("XDG_STATE_HOME") or ((os.getenv("HOME") or "") .. "/.local/state")
+  local MAP_PATH = state_home .. "/context-switcher/blocks.lua"
+  local SETTLED_PATH = state_home .. "/context-switcher/reconcile-state"
+
+  local C = {}
+  C.slots = SLOTS
+
+  local map = nil
+
+  local function load_map()
+    local ok, value = pcall(dofile, MAP_PATH)
+    if ok and type(value) == "table" then
+      map = value
+      return true
+    end
+    map = nil
+    return false
+  end
+
+  local function load_settled()
+    local generation, monitor_set = -1, ""
+    local file = io.open(SETTLED_PATH, "r")
+    if file then
+      generation = tonumber(file:read("*l")) or -1
+      monitor_set = file:read("*l") or ""
+      file:close()
+    end
+    return generation, monitor_set
+  end
+
+  local function save_settled(generation, monitor_set)
+    local file = io.open(SETTLED_PATH, "w")
+    if file then
+      file:write(tostring(generation) .. "\n" .. monitor_set .. "\n")
+      file:close()
+    end
+  end
+
+  local function identities_of(monitors)
+    local ordered = {}
+    for _, monitor in ipairs(monitors) do
+      ordered[#ordered + 1] = monitor
+    end
+    table.sort(ordered, function(left, right)
+      local left_internal = (left.name or ""):match("^eDP") or (left.name or ""):match("^LVDS") or (left.name or ""):match("^DSI")
+      local right_internal = (right.name or ""):match("^eDP") or (right.name or ""):match("^LVDS") or (right.name or ""):match("^DSI")
+      if (left_internal ~= nil) ~= (right_internal ~= nil) then
+        return left_internal ~= nil
+      end
+      return (left.name or "") < (right.name or "")
+    end)
+
+    local seen = {}
+    local identities = {}
+    for _, monitor in ipairs(ordered) do
+      local base_name = monitor.description or ""
+      if base_name == "" then
+        base_name = monitor.name or ""
+      end
+      local identity = base_name
+      if seen[identity] then
+        identity = base_name .. " #" .. (monitor.name or "")
+      end
+      seen[identity] = true
+      identities[monitor.name] = identity
+    end
+    return identities
+  end
+
+  local function monitor_identity(monitor, identities)
+    return identities[monitor.name] or monitor.name or ""
+  end
+
+  local function connected(gone)
+    local monitors = {}
+    for _, monitor in ipairs(hl.get_monitors()) do
+      if not monitor.is_mirror and monitor.name ~= gone then
+        monitors[#monitors + 1] = monitor
+      end
+    end
+    return monitors
+  end
+
+  local function monitor_set_hash(monitors, identities)
+    local parts = {}
+    for _, monitor in ipairs(monitors) do
+      parts[#parts + 1] = monitor_identity(monitor, identities) .. "|" .. (monitor.name or "")
+    end
+    table.sort(parts)
+    return table.concat(parts, ";")
+  end
+
+  local function context_block(context)
+    if map and map.context_blocks then
+      return map.context_blocks[context]
+    end
+    return nil
+  end
+
+  local function context_owner(context)
+    if map and map.context_monitor then
+      return map.context_monitor[context]
+    end
+    return nil
+  end
+
+  local function default_block(identity)
+    if map and map.default_blocks then
+      return map.default_blocks[identity]
+    end
+    return nil
+  end
+
+  local function active_context(identity)
+    if map and map.active then
+      return map.active[identity]
+    end
+    return nil
+  end
+
+  local function active_block(identity)
+    local context = active_context(identity)
+    if context then
+      return context_block(context)
+    end
+    return default_block(identity)
+  end
+
+  local function workspace_id(identity, slot)
+    local block = active_block(identity)
+    if not block then
+      return nil
+    end
+    return block * SLOTS + slot
+  end
+
+  local function regular(workspace)
+    return workspace and not workspace.special and workspace.id > 0
+  end
+
+  local function block_of(id)
+    return math.floor((id - 1) / SLOTS)
+  end
+
+  local function move_workspace_to(id, monitor_name)
+    local workspace = hl.get_workspace(id)
+    if workspace and workspace.monitor and workspace.monitor.name ~= monitor_name then
+      hl.dispatch(hl.dsp.workspace.move({ workspace = tostring(id), monitor = monitor_name }))
+    end
+  end
+
+  local function show(monitor, id)
+    local workspace = hl.get_workspace(id)
+    if workspace and workspace.monitor and workspace.monitor.name ~= monitor.name then
+      move_workspace_to(id, monitor.name)
+      workspace = hl.get_workspace(id)
+    end
+    hl.dispatch(hl.dsp.focus({ monitor = monitor.name }))
+    hl.dispatch(hl.dsp.focus({ workspace = tostring(id) }))
+  end
+
+  local function settle(monitor, identities)
+    local identity = monitor_identity(monitor, identities)
+    local block = active_block(identity)
+    if not block then
+      return
+    end
+    local active = monitor.active_workspace
+    if regular(active) and block_of(active.id) ~= block then
+      show(monitor, block * SLOTS + 1)
+    end
+  end
+
+  -- Move the active workspace into the target monitor's active manager. Keep
+  -- its slot number when free, otherwise take the first free slot. The
+  -- workspace is renumbered into the target block: it becomes part of that
+  -- context/default manager.
+  local function adopt_active_workspace(target, identities)
+    local workspace = hl.get_active_workspace()
+    local source = hl.get_active_monitor()
+    if not regular(workspace) or not source or not target then
+      return
+    end
+    local target_identity = monitor_identity(target, identities)
+    local block = active_block(target_identity)
+    if not block then
+      return
+    end
+
+    local slot = (workspace.id - 1) % SLOTS + 1
+    local target_id = nil
+    if not hl.get_workspace(block * SLOTS + slot) then
+      target_id = block * SLOTS + slot
+    else
+      for candidate = 1, SLOTS do
+        local id = block * SLOTS + candidate
+        if not hl.get_workspace(id) then
+          target_id = id
+          break
+        end
+      end
+    end
+    if not target_id then
+      return
+    end
+
+    if workspace.monitor and workspace.monitor.name ~= target.name then
+      hl.dispatch(hl.dsp.workspace.move({ workspace = tostring(workspace.id), monitor = target.name }))
+    end
+    if workspace.id ~= target_id then
+      hl.dispatch(hl.dsp.workspace.change_id({ workspace = tostring(workspace.id), id = target_id }))
+    end
+
+    if source and source.name ~= target.name then
+      -- Hyprland may pull another workspace onto the source monitor while the
+      -- moved workspace is still settling. Settle after the move lands, then
+      -- return focus to the moved workspace on the target.
+      hl.timer(function()
+        settle(source, identities)
+        hl.dispatch(hl.dsp.focus({ monitor = target.name }))
+        hl.dispatch(hl.dsp.focus({ workspace = tostring(target_id) }))
+      end, { type = "oneshot", timeout = 50 })
+    else
+      hl.dispatch(hl.dsp.focus({ monitor = target.name }))
+      hl.dispatch(hl.dsp.focus({ workspace = tostring(target_id) }))
+    end
+  end
+
+  function C.reconcile(added, gone)
+    if not load_map() then
+      return
+    end
+    local monitors = connected(gone)
+    if #monitors == 0 then
+      return
+    end
+    local identities = identities_of(monitors)
+    local set_hash = monitor_set_hash(monitors, identities)
+    local generation = map.generation or 0
+    local settled_generation, settled_set = load_settled()
+
+    if not added and not gone and set_hash == settled_set and generation == settled_generation then
+      return
+    end
+
+    local focused_window = hl.get_active_window()
+    local focused_monitor = hl.get_active_monitor()
+    local focused_name = focused_monitor and focused_monitor.name
+    local changed = false
+
+    -- Restore context blocks to their owner monitors.
+    if map.context_blocks then
+      for context, block in pairs(map.context_blocks) do
+        local owner = context_owner(context)
+        if owner then
+          local owner_monitor = nil
+          for _, monitor in ipairs(monitors) do
+            if monitor_identity(monitor, identities) == owner then
+              owner_monitor = monitor
+              break
+            end
+          end
+          if owner_monitor then
+            for slot = 1, SLOTS do
+              local id = block * SLOTS + slot
+              local workspace = hl.get_workspace(id)
+              if workspace and workspace.monitor and workspace.monitor.name ~= owner_monitor.name
+                and (workspace.windows or 0) > 0 then
+                move_workspace_to(id, owner_monitor.name)
+                changed = true
+              end
+            end
+          end
+        end
+      end
+    end
+
+    -- Restore default blocks to their monitors.
+    if map.default_blocks then
+      for owner, block in pairs(map.default_blocks) do
+        local owner_monitor = nil
+        for _, monitor in ipairs(monitors) do
+          if monitor_identity(monitor, identities) == owner then
+            owner_monitor = monitor
+            break
+          end
+        end
+        if owner_monitor then
+          for slot = 1, SLOTS do
+            local id = block * SLOTS + slot
+            local workspace = hl.get_workspace(id)
+            if workspace and workspace.monitor and workspace.monitor.name ~= owner_monitor.name
+              and (workspace.windows or 0) > 0 then
+              move_workspace_to(id, owner_monitor.name)
+              changed = true
+            end
+          end
+        end
+      end
+    end
+
+    local function settle_monitors()
+      local touched = false
+      for _, monitor in ipairs(monitors) do
+        local identity = monitor_identity(monitor, identities)
+        local block = active_block(identity)
+        if block then
+          local active = monitor.active_workspace
+          if regular(active) and block_of(active.id) ~= block then
+            show(monitor, block * SLOTS + 1)
+            touched = true
+          end
+        end
+      end
+      return touched
+    end
+
+    changed = settle_monitors() or changed
+    save_settled(generation, set_hash)
+
+    local function restore_focus()
+      if focused_window and hl.get_window("address:" .. focused_window.address) then
+        hl.dispatch(hl.dsp.focus({ window = "address:" .. focused_window.address }))
+      elseif focused_name and focused_name ~= gone and hl.get_monitor(focused_name) then
+        hl.dispatch(hl.dsp.focus({ monitor = focused_name }))
+      end
+    end
+
+    if changed then
+      restore_focus()
+      -- Workspace moves can land after the first pass; settle once more after
+      -- they have taken effect, then restore focus.
+      hl.timer(function()
+        settle_monitors()
+        restore_focus()
+      end, { type = "oneshot", timeout = 50 })
+    end
+  end
+
+  function C.reload()
+    load_map()
+    C.reconcile()
+  end
+
+  function C.workspace_id(monitor_name, slot)
+    if not load_map() then
+      return nil
+    end
+    local monitor = monitor_name and hl.get_monitor(monitor_name) or hl.get_active_monitor()
+    if not monitor then
+      return nil
+    end
+    local identities = identities_of(hl.get_monitors())
+    local identity = monitor_identity(monitor, identities)
+    return workspace_id(identity, slot)
+  end
+
+  local function action(fn, expression)
+    o.bind_expressions[fn] = expression
+    return fn
+  end
+
+  function C.focus(slot, monitor_name)
+    return action(function()
+      if not load_map() then
+        return
+      end
+      local monitor = monitor_name and hl.get_monitor(monitor_name) or hl.get_active_monitor()
+      if not monitor then
+        return
+      end
+      local identities = identities_of(hl.get_monitors())
+      local identity = monitor_identity(monitor, identities)
+      local id = workspace_id(identity, slot)
+      if not id then
+        return
+      end
+      if not monitor.focused then
+        hl.dispatch(hl.dsp.focus({ monitor = monitor.name }))
+      end
+      hl.dispatch(hl.dsp.focus({ workspace = tostring(id) }))
+    end, "o.workspaces.focus(" .. slot .. (monitor_name and ", " .. string.format("%q", monitor_name) or "") .. ")")
+  end
+
+  function C.move_window(slot, follow)
+    return action(function()
+      if not load_map() then
+        return
+      end
+      local window = hl.get_active_window()
+      local monitor = hl.get_active_monitor()
+      if not window or not monitor then
+        return
+      end
+      local identities = identities_of(hl.get_monitors())
+      local identity = monitor_identity(monitor, identities)
+      local id = workspace_id(identity, slot)
+      if not id then
+        return
+      end
+      hl.dispatch(hl.dsp.window.move({
+        workspace = tostring(id),
+        follow = follow ~= false,
+        window = "address:" .. window.address,
+      }))
+    end, "o.workspaces.move_window(" .. slot .. (follow == false and ", false" or "") .. ")")
+  end
+
+  function C.move_to_monitor(direction)
+    return action(function()
+      if not load_map() then
+        return
+      end
+      local target = hl.get_monitor(direction)
+      if not target then
+        return
+      end
+      local identities = identities_of(hl.get_monitors())
+      adopt_active_workspace(target, identities)
+    end, "o.workspaces.move_to_monitor(" .. string.format("%q", direction) .. ")")
+  end
+
+  function C.move_workspace_to_monitor(target_name)
+    if not load_map() then
+      return
+    end
+    local target = target_name and hl.get_monitor(target_name)
+    if not target then
+      return
+    end
+    local identities = identities_of(hl.get_monitors())
+    adopt_active_workspace(target, identities)
+  end
+
+  function C.move_window_to_monitor(direction)
+    return action(function()
+      if not load_map() then
+        return
+      end
+      local target = hl.get_monitor(direction)
+      local window = hl.get_active_window()
+      if not target or not window then
+        return
+      end
+      local identities = identities_of(hl.get_monitors())
+      local target_identity = monitor_identity(target, identities)
+      local block = active_block(target_identity)
+      if not block then
+        return
+      end
+      local source = hl.get_active_monitor()
+      local workspace = hl.get_active_workspace()
+      local slot = workspace and (((workspace.id - 1) % SLOTS) + 1) or 1
+      local target_id = block * SLOTS + slot
+      local existing = hl.get_workspace(target_id)
+      if existing and existing.windows and existing.windows > 0 then
+        local found = false
+        for candidate = 1, SLOTS do
+          local id = block * SLOTS + candidate
+          local candidate_workspace = hl.get_workspace(id)
+          if not candidate_workspace or (candidate_workspace.windows or 0) == 0 then
+            target_id = id
+            found = true
+            break
+          end
+        end
+        if not found then
+          return
+        end
+      end
+      hl.dispatch(hl.dsp.window.move({
+        workspace = tostring(target_id),
+        follow = true,
+        window = "address:" .. window.address,
+      }))
+      if source and source.name ~= target.name then
+        settle(source, identities)
+      end
+      hl.dispatch(hl.dsp.focus({ monitor = target.name }))
+      hl.dispatch(hl.dsp.focus({ workspace = tostring(target_id) }))
+    end, "o.workspaces.move_window_to_monitor(" .. string.format("%q", direction) .. ")")
+  end
+
+  base.reconcile = C.reconcile
+  o.workspaces = C
+  return C
+end
+
+context_workspaces = context_switcher_workspaces()
+LUA
+  cat <<'LUA'
 -- Generated by omarchy-context-switcher-generate. Source: ~/.config/context-switcher/config.json.
 -- Context Switcher keybindings.
 
@@ -75,6 +578,35 @@ LUA
     .contexts[] | select(.shortcut != null and .shortcut != "") |
     "o.bind(\"SUPER + ALT + " + (.shortcut | ascii_upcase) + "\", \"" + (.name // .id) + " menu\", \"omarchy-context-switcher menu " + .id + "\")"
   '
+  echo
+  cat <<'LUA'
+-- Context cycling (owned contexts of the focused monitor).
+hl.unbind("SUPER + CTRL + ALT + TAB")
+o.bind("SUPER + CTRL + ALT + TAB", "Next context", "omarchy-context-switcher context-next")
+hl.unbind("SUPER + CTRL + ALT + SHIFT + TAB")
+o.bind("SUPER + CTRL + ALT + SHIFT + TAB", "Previous context", "omarchy-context-switcher context-prev")
+
+-- Move the active context to the monitor in that direction.
+hl.unbind("SUPER + SHIFT + CTRL + ALT + LEFT")
+o.bind("SUPER + SHIFT + CTRL + ALT + LEFT", "Move context left", "omarchy-context-switcher move-context left")
+hl.unbind("SUPER + SHIFT + CTRL + ALT + RIGHT")
+o.bind("SUPER + SHIFT + CTRL + ALT + RIGHT", "Move context right", "omarchy-context-switcher move-context right")
+hl.unbind("SUPER + SHIFT + CTRL + ALT + UP")
+o.bind("SUPER + SHIFT + CTRL + ALT + UP", "Move context up", "omarchy-context-switcher move-context up")
+hl.unbind("SUPER + SHIFT + CTRL + ALT + DOWN")
+o.bind("SUPER + SHIFT + CTRL + ALT + DOWN", "Move context down", "omarchy-context-switcher move-context down")
+
+-- Workspace to monitor: use the same guard path as SUPER+backslash so the
+-- workspace lands in the target monitor's active context/default manager.
+hl.unbind("SUPER + SHIFT + ALT + LEFT")
+o.bind("SUPER + SHIFT + ALT + LEFT", "Move workspace to left monitor", "omarchy-context-switcher move-workspace-to-monitor left")
+hl.unbind("SUPER + SHIFT + ALT + RIGHT")
+o.bind("SUPER + SHIFT + ALT + RIGHT", "Move workspace to right monitor", "omarchy-context-switcher move-workspace-to-monitor right")
+hl.unbind("SUPER + SHIFT + ALT + UP")
+o.bind("SUPER + SHIFT + ALT + UP", "Move workspace to up monitor", "omarchy-context-switcher move-workspace-to-monitor up")
+hl.unbind("SUPER + SHIFT + ALT + DOWN")
+o.bind("SUPER + SHIFT + ALT + DOWN", "Move workspace to down monitor", "omarchy-context-switcher move-workspace-to-monitor down")
+LUA
   echo
   # Browser: launch the default Chrome profile explicitly — Omarchy's default
   # binding opens the last-used profile. Lives here (not the user's global

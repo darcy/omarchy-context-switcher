@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""Migrate Context Switcher to context-owned virtual workspace-managers.
+
+Model:
+  * Every monitor keeps its Omarchy default block (its permanent fallback).
+  * Each context gets one block from 100+, owned by exactly one monitor.
+  * A context's workspaces live on its owner monitor.
+
+This handles both the older global-range state and the per-monitor block state.
+Idempotent: exits when state.context_model is already 2.
+"""
+
+import json
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = os.environ.get("HOME", "")
+CONFIG = os.path.join(HOME, ".config/context-switcher/config.json")
+STATE_DIR = os.path.join(HOME, ".local/state/context-switcher")
+STATE = os.path.join(STATE_DIR, "context.json")
+BLOCKS = os.path.join(STATE_DIR, "blocks.lua")
+OMARCHY_STATE = os.path.join(HOME, ".local/state/omarchy/monitor-workspaces")
+
+
+def run(cmd):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+
+def hyprctl_json(args):
+    out = run("hyprctl " + args + " -j").stdout
+    return json.loads(out) if out.strip() else []
+
+
+def atomic_write(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(content)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def lua_string(value):
+    return json.dumps(str(value))
+
+
+def identity(monitor):
+    return monitor.get("description") or monitor.get("name") or ""
+
+
+def internal(monitor):
+    return (monitor.get("name") or "").startswith(("eDP", "LVDS", "DSI"))
+
+
+def context_for_global(config, ws_id):
+    slots = config.get("slots", 10)
+    for index, context in enumerate(config.get("contexts", [])):
+        base = index * slots + 1
+        if base <= ws_id < base + slots:
+            return context["id"]
+    return ""
+
+
+def slot_for_global(config, ws_id):
+    context = context_for_global(config, ws_id)
+    if not context:
+        return 0
+    slots = config.get("slots", 10)
+    index = next(i for i, c in enumerate(config.get("contexts", [])) if c["id"] == context)
+    return ws_id - (index * slots + 1) + 1
+
+
+def read_default_blocks():
+    blocks = {}
+    if not os.path.exists(OMARCHY_STATE):
+        return blocks
+    try:
+        with open(OMARCHY_STATE) as handle:
+            for line in handle:
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) >= 3 and fields[2]:
+                    blocks[fields[2]] = int(fields[0])
+    except Exception:
+        pass
+    return blocks
+
+
+def free_default_block(blocks):
+    used = set(blocks.values())
+    block = 0
+    while block in used:
+        block += 1
+    return block
+
+
+def write_blocks(state, config, path):
+    slots = config.get("slots", 10)
+    lines = [
+        "return {",
+        "  generation = %d," % int(state.get("generation", 1)),
+        "  slots = %d," % int(slots),
+        "  context_blocks = {",
+    ]
+    for context, block in state.get("context_blocks", {}).items():
+        lines.append("    [%s] = %d," % (lua_string(context), int(block)))
+    lines.append("  },")
+    lines.append("  context_monitor = {")
+    for context, owner in state.get("context_monitor", {}).items():
+        lines.append("    [%s] = %s," % (lua_string(context), lua_string(owner)))
+    lines.append("  },")
+    lines.append("  default_blocks = {")
+    for owner, block in state.get("default_blocks", {}).items():
+        lines.append("    [%s] = %d," % (lua_string(owner), int(block)))
+    lines.append("  },")
+    lines.append("  active = {")
+    for owner, context in state.get("monitor_context", {}).items():
+        if context:
+            lines.append("    [%s] = %s," % (lua_string(owner), lua_string(context)))
+    lines.append("  },")
+    lines.append("}")
+    atomic_write(path, "\n".join(lines) + "\n")
+
+
+def main():
+    if not os.path.exists(CONFIG):
+        print("context-switcher migrate: no config, skipping", file=sys.stderr)
+        return 0
+
+    with open(CONFIG) as handle:
+        config = json.load(handle)
+    contexts = config.get("contexts", [])
+    if not contexts:
+        print("context-switcher migrate: no contexts, skipping", file=sys.stderr)
+        return 0
+    slots = config.get("slots", 10)
+
+    state = {}
+    if os.path.exists(STATE):
+        try:
+            with open(STATE) as handle:
+                state = json.load(handle)
+        except Exception:
+            state = {}
+    if state.get("context_model") == 2:
+        print("context-switcher migrate: already on context model", file=sys.stderr)
+        return 0
+
+    monitors = hyprctl_json("monitors")
+    if not monitors:
+        print("context-switcher migrate: no monitors, retrying later", file=sys.stderr)
+        return 1
+    clients = hyprctl_json("clients")
+
+    # Internal panel first, then connector order, matching Omarchy's block order.
+    monitors = sorted(monitors, key=lambda m: (0 if internal(m) else 1, m.get("name", "")))
+    by_id = {m.get("id"): m for m in monitors}
+
+    monitor_order = []
+    assigned_by_name = {}
+    seen = set()
+    for monitor in monitors:
+        base = identity(monitor)
+        ident = base
+        if ident in seen:
+            ident = base + " #" + (monitor.get("name") or str(monitor.get("id")))
+        seen.add(ident)
+        assigned_by_name[monitor.get("name")] = ident
+        monitor_order.append(ident)
+
+    default_blocks = read_default_blocks()
+    for monitor in monitors:
+        ident = assigned_by_name[monitor.get("name")]
+        if ident not in default_blocks:
+            default_blocks[ident] = free_default_block(default_blocks)
+
+    # Context blocks are independent of monitors and never renumbered.
+    context_blocks = {}
+    next_block = 100
+    for index, context in enumerate(contexts):
+        context_blocks[context["id"]] = next_block
+        next_block += 1
+
+    # Resolve every client's current context/slot/monitor. Prefer the
+    # per-monitor block map from the previous migration; fall back to the old
+    # global ranges.
+    old_workspace_blocks = state.get("workspace_blocks") or {}
+    entries = []
+    for client in clients:
+        ws_id = (client.get("workspace") or {}).get("id", 0)
+        if ws_id <= 0:
+            continue
+        context = ""
+        slot = 0
+        source_identity = ""
+        for ident, contexts_map in old_workspace_blocks.items():
+            for candidate, block in contexts_map.items():
+                base = block * slots + 1
+                if base <= ws_id < base + slots:
+                    context = candidate
+                    slot = ws_id - block * slots
+                    source_identity = ident
+                    break
+            if context:
+                break
+        if not context:
+            context = context_for_global(config, ws_id)
+            slot = slot_for_global(config, ws_id)
+        monitor = by_id.get(client.get("monitor"))
+        if not monitor:
+            continue
+        if not source_identity:
+            source_identity = assigned_by_name.get(monitor.get("name"))
+        entries.append({
+            "address": client.get("address"),
+            "ws_id": ws_id,
+            "context": context,
+            "slot": slot,
+            "monitor": assigned_by_name.get(monitor.get("name")),
+            "monitor_name": monitor.get("name"),
+        })
+
+    # Count windows per context per monitor, then assign an owner.
+    counts = {}
+    for entry in entries:
+        if not entry["context"]:
+            continue
+        counts.setdefault(entry["context"], {})
+        counts[entry["context"]][entry["monitor"]] = counts[entry["context"]].get(entry["monitor"], 0) + 1
+
+    old_monitor_context = state.get("monitor_context") or {}
+    first_identity = monitor_order[0] if monitor_order else ""
+    context_monitor = {}
+    for context in contexts:
+        context_id = context["id"]
+        per_monitor = counts.get(context_id, {})
+        if per_monitor:
+            owner = max(
+                per_monitor.items(),
+                key=lambda item: (item[1], old_monitor_context.get(item[0]) == context_id),
+            )[0]
+        else:
+            owner = first_identity
+        context_monitor[context_id] = owner
+
+    # Move each source workspace's windows into its context block on the owner.
+    slot_used = {}
+    source_target = {}
+    moved = 0
+    focused = next((m for m in monitors if m.get("focused")), None)
+
+    for entry in entries:
+        context = entry["context"]
+        if not context or context not in context_monitor:
+            continue
+        owner = context_monitor[context]
+        block = context_blocks[context]
+        owner_name = next((m.get("name") for m in monitors if assigned_by_name.get(m.get("name")) == owner), "")
+        if not owner_name:
+            continue
+
+        key = (context, entry["ws_id"])
+        if key not in source_target:
+            wanted = entry["slot"] if entry["monitor"] == owner and entry["slot"] > 0 else 0
+            chosen = 0
+            if wanted and not slot_used.get((context, block * slots + wanted)):
+                chosen = wanted
+            else:
+                for slot in range(1, slots + 1):
+                    if not slot_used.get((context, block * slots + slot)):
+                        chosen = slot
+                        break
+            if not chosen:
+                chosen = 1
+            target_ws = block * slots + chosen
+            slot_used[(context, target_ws)] = True
+            source_target[key] = target_ws
+
+        target_ws = source_target[key]
+        if target_ws == entry["ws_id"] and entry["monitor"] == owner:
+            continue
+
+        run("hyprctl eval " + shlex.quote(
+            'hl.dispatch(hl.dsp.focus({ monitor = "%s" }))' % owner_name
+        ))
+        run("hyprctl eval " + shlex.quote(
+            'hl.dispatch(hl.dsp.window.move({ workspace = "%d", follow = false, window = "address:%s" }))'
+            % (target_ws, entry["address"])
+        ))
+        moved += 1
+        time.sleep(0.02)
+
+    # Pick each monitor's active manager: keep the old context when it now owns
+    # it, otherwise the owned context with the most windows, otherwise default.
+    monitor_context = {}
+    for ident in monitor_order:
+        old = old_monitor_context.get(ident)
+        if old and context_monitor.get(old) == ident:
+            monitor_context[ident] = old
+            continue
+        owned = [c["id"] for c in contexts if context_monitor.get(c["id"]) == ident]
+        if not owned:
+            continue
+        best = None
+        best_count = -1
+        for context_id in owned:
+            count = counts.get(context_id, {}).get(ident, 0)
+            if count > best_count:
+                best = context_id
+                best_count = count
+        monitor_context[ident] = best
+
+    new_state = dict(state)
+    new_state.update({
+        "context_blocks": context_blocks,
+        "context_monitor": context_monitor,
+        "default_blocks": default_blocks,
+        "monitor_order": monitor_order,
+        "monitor_context": monitor_context,
+        "next_block": next_block,
+        "generation": int(state.get("generation", 0)) + 1,
+        "context_model": 2,
+        "migrated": True,
+    })
+    new_state.pop("workspace_blocks", None)
+    new_state.pop("manual", None)
+
+    if os.path.exists(STATE):
+        try:
+            with open(STATE, "rb") as src, open(STATE + ".bak.pre-context-model", "wb") as dst:
+                dst.write(src.read())
+        except Exception:
+            pass
+    atomic_write(STATE, json.dumps(new_state, separators=(",", ":")))
+    write_blocks(new_state, config, BLOCKS)
+
+    # Put the focused monitor back on its active manager's last slot.
+    if focused:
+        ident = assigned_by_name.get(focused.get("name"))
+        context = monitor_context.get(ident)
+        if context:
+            slot = (state.get("last_workspace") or {}).get(context, 1)
+            target = context_blocks[context] * slots + slot
+        else:
+            target = default_blocks[ident] * slots + 1
+        run("hyprctl eval " + shlex.quote(
+            'hl.dispatch(hl.dsp.focus({ monitor = "%s" }))' % focused.get("name")
+        ))
+        run("hyprctl eval " + shlex.quote(
+            'hl.dispatch(hl.dsp.focus({ workspace = "%d" }))' % target
+        ))
+
+    owners = ", ".join("%s=%s" % (c["id"], context_monitor.get(c["id"], "?")) for c in contexts)
+    print(
+        "context-switcher migrate: moved %d windows; owners: %s; blocks from 100"
+        % (moved, owners),
+        file=sys.stderr,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
